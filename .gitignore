@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# 模型文件（体积大，不入库）
+voice-bridge/models/*.onnx
+voice-bridge/models/*.int8.onnx
+voice-bridge/models/*.bin
+
+# 环境与密钥
+.env
+*.env
+
+# 日志与临时
+*.log
+*.tmp
+
+# 系统
+Thumbs.db
+.DS_Store
