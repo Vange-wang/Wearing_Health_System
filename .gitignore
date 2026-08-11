@@ -20,3 +20,6 @@ voice-bridge/models/*.bin
 # 系统
 Thumbs.db
 .DS_Store
+
+# WorkBuddy 项目数据（记忆/日志，不入库）
+.workbuddy/
