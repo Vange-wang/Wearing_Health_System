@@ -37,12 +37,13 @@ llm = None
 tts = None
 asr_load_error: str | None = None
 llm_config_error: str | None = None
+tts_load_error: str | None = None
 
 
 @app.on_event("startup")
 def startup():
     """启动时预加载模型并报告状态（Spec §5 health）。"""
-    global asr, llm, tts, asr_load_error, llm_config_error
+    global asr, llm, tts, asr_load_error, llm_config_error, tts_load_error
     try:
         asr = create_asr(cfg)
     except ASRModelLoadError as e:
@@ -56,6 +57,7 @@ def startup():
     try:
         tts = create_tts(cfg)
     except Exception as e:
+        tts_load_error = str(e)
         logger.error("TTS 初始化失败: %s", e)
 
 
@@ -77,7 +79,7 @@ async def voice_chat(audio: UploadFile = File(...)):
     if llm is None:
         return _err(500, "config_error", llm_config_error or "LLM 配置缺失")
     if tts is None:
-        return _err(503, "service_unavailable", "TTS 未就绪")
+        return _err(503, "service_unavailable", tts_load_error or "TTS 未就绪")
 
     suffix = Path(audio.filename or "in.wav").suffix.lower()
     if suffix != ".wav":
