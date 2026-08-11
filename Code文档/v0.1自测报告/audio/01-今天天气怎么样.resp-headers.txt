@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+date: Tue, 11 Aug 2026 11:53:34 GMT
+server: uvicorn
+x-timing: {"asr_ms": 188, "llm_ms": 2259, "tts_ms": 1854, "total_ms": 4386}
+content-length: 226298
+content-type: application/octet-stream
+

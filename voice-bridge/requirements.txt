@@ -1,0 +1,9 @@
+# voice-bridge v0.1 运行依赖（Spec v0.1 §3 已敲定，不得增减）
+fastapi>=0.110
+uvicorn>=0.29
+sherpa-onnx>=1.10.30
+edge-tts>=6.1,<7.0  # 7.x 移除 output_format（固定24k mp3），6.1.x 支持直接输出 16kHz WAV
+piper-tts>=1.2.0
+openai>=1.30
+python-multipart>=0.0.9
+PyYAML>=6.0

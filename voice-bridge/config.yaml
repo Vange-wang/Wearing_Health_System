@@ -1,0 +1,18 @@
+server:
+  host: 0.0.0.0
+  port: 8710
+asr:
+  model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
+  sample_rate: 16000
+tts:
+  primary: edge
+  edge_voice: zh-CN-XiaoxiaoNeural
+  fallback: piper
+  piper_model: models/piper/zh_CN-huayan-medium.onnx
+  piper_config: models/piper/zh_CN-huayan-medium.onnx.json
+llm:
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+log:
+  level: INFO

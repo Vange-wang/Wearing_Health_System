@@ -1,0 +1,4 @@
+# voice-bridge v0.1 开发依赖（Spec §9.6：pytest 冒烟测试）
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27

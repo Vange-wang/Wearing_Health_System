@@ -4,10 +4,8 @@ __pycache__/
 venv/
 .venv/
 
-# 模型文件（体积大，不入库）
-voice-bridge/models/*.onnx
-voice-bridge/models/*.int8.onnx
-voice-bridge/models/*.bin
+# 模型文件（体积大，整目录不入库）
+voice-bridge/models/
 
 # 环境与密钥
 .env
@@ -23,3 +21,6 @@ Thumbs.db
 
 # WorkBuddy 项目数据（记忆/日志，不入库）
 .workbuddy/
+
+# 临时目录
+.tmp*/
