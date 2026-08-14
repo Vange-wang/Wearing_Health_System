@@ -14,7 +14,7 @@
 
 - Hermes 审查调用（**invocation-only 覆盖，不改默认 profile**）：
   ```bash
-  hermes chat --model deepseek-v4-pro --resume 20260811_092140_61974b -q "<审查请求>" -Q
+  hermes chat --model deepseek-v4-pro --resume 20260814_154943_ca2e6f -q "<审查请求>" -Q
   ```
 - ✅ 已验证（2026-08-11）：`deepseek-v4-pro` 在 Hermes 中可用（实测返回正常）。
 - Hermes 默认模型当前为 `deepseek-v4-flash`（日常对话可用），**审查必须显式切 v4-pro**。
@@ -22,12 +22,12 @@
 ## 2. 沟通桥梁（Session 铁律）
 
 - **常驻 Session**（除非 Vange 明确说"新开 session"，否则永远在同一个 session 里交接）：
-  - Hermes 侧：`20260811_092140_61974b`（WorkBuddy↔Hermes 协作线程（4）·v0.1语音桥开发启动）
+  - Hermes 侧：`20260814_154943_ca2e6f`（WorkBuddy↔Hermes 协作线程（5）·v0.2 修订期）
   - WorkBuddy 侧：当前与 Vange 的对话线程（WorkBuddy 记忆目录 `.workbuddy/memory/` 保证跨会话连续）
 - 常用命令：
   ```bash
-  hermes chat --resume 20260811_092140_61974b                    # 交互式恢复（Vange 侧边栏/终端用）
-  hermes chat --resume 20260811_092140_61974b -q "<消息>" -Q     # 单轮交接（WorkBuddy 用）
+  hermes chat --resume 20260814_154943_ca2e6f                    # 交互式恢复（Vange 侧边栏/终端用）
+  hermes chat --resume 20260814_154943_ca2e6f -q "<消息>" -Q     # 单轮交接（WorkBuddy 用）
   hermes sessions list                                            # 查会话
   hermes sessions export --session-id <ID> --format md <路径>     # 归档会话
   ```
