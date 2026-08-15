@@ -25,6 +25,11 @@ class Config:
         asr = self._data.get("asr", {})
         self.asr_model_dir = BASE_DIR / asr.get("model_dir", "models/sherpa-onnx-sense-voice-zh")
         self.asr_sample_rate = int(asr.get("sample_rate", 16000))
+        # v0.4 A2：流式 ASR 模型（zipformer streaming）
+        self.asr_streaming_model_dir = BASE_DIR / asr.get(
+            "streaming_model_dir",
+            "models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20",
+        )
 
         tts = self._data.get("tts", {})
         self.tts_primary = tts.get("primary", "edge")

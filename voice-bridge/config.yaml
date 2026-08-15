@@ -4,6 +4,7 @@ server:
 asr:
   model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
   sample_rate: 16000
+  streaming_model_dir: models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 tts:
   primary: edge
   edge_voice: zh-CN-XiaoxiaoNeural

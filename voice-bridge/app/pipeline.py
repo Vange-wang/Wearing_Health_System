@@ -77,12 +77,7 @@ class StreamingPipeline:
         self.rag_score_threshold = float(rag_score_threshold)
         self.timing: dict = {}
 
-    async def run(self, samples: np.ndarray, wav_path: Path):
-        """异步生成器：逐帧产出长度前缀帧 bytes。
-
-        首帧产出前，所有"预期失败"（VAD/ASR/LLM/TTS）都以异常抛出，
-        由路由在响应头发出前映射为错误状态码。
-        """
+    def _init_timing(self):
         self.timing = {
             "asr_ms": None,
             "llm_ttft_ms": None,
@@ -99,18 +94,35 @@ class StreamingPipeline:
             "route": HERMES,
         }
 
+    async def run(self, samples: np.ndarray, wav_path: Path):
+        """批式路径（v0.2/v0.3 兼容）：VAD → 批式 ASR(SenseVoice) → 下游。"""
+        self._init_timing()
+
         # 1. VAD
         if not self.vad.is_speech(samples):
             raise NoSpeechError("VAD 检测到静音/无效语音")
 
-        # 2. ASR（批式，复用 v0.1 实现）
+        # 2. ASR（批式）
         t = time.perf_counter()
         text = self.asr.transcribe(wav_path)
         self.timing["asr_ms"] = round((time.perf_counter() - t) * 1000)
         if not text:
             raise NoSpeechError("ASR 未识别出有效语音")
 
-        # 2.5 路由判定 + RAG 检索（长期 RAG，Spec §3 A2 四步规则）
+        async for frame in self._stream_from_text(text):
+            yield frame
+
+    async def run_text(self, text: str):
+        """流式路径（v0.4 A2）：text 已由流式 ASR 给出，直接走下游（路由/LLM/TTS/帧）。"""
+        self._init_timing()
+        if not text:
+            raise NoSpeechError("流式 ASR 未识别出有效语音")
+        async for frame in self._stream_from_text(text):
+            yield frame
+
+    async def _stream_from_text(self, text: str):
+        """text → 路由（轻量/RAG/Hermes）→ LLM 流 → 分句 → TTS → 长度前缀帧。"""
+        # 路由判定 + RAG 检索（长期 RAG，Spec §3 A2 四步规则）
         rag_results: list[dict] = []
         if self.rag is not None:
             rag_results = self.rag.search(text, top_k=self.rag_top_k, score_threshold=self.rag_score_threshold)
@@ -130,7 +142,7 @@ class StreamingPipeline:
                 final_text = f"【知识库参考，仅据以下内容回答】\n{ctx}\n\n用户问题：{text}"
         self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
 
-        # 3. LLM 流 → 分句 → 逐句 TTS → 帧
+        # LLM 流 → 分句 → 逐句 TTS → 帧
         splitter = SentenceBuffer(max_chars=self.sentence_max_chars)
         llm_t0 = time.perf_counter()
         ttft_done = False

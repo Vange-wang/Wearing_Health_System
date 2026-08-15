@@ -1,9 +1,11 @@
-"""FastAPI 入口与路由（Spec §5）。
+"""FastAPI 入口与路由（Spec §5 + v0.4 流式）。
 
 接口：
-- GET  /api/v1/health            → {"status","asr","tts":{...},"vad"}（v0.2 改造）
+- GET  /api/v1/health            → {"status","asr","tts":{...},"vad","llm"}
 - POST /api/v1/voice/chat        → multipart audio(WAV 16k/16bit/mono ≤15s) → WAV bytes + X-Timing（v0.1 保留）
-- POST /api/v1/voice/chat/stream → 长度前缀帧流（v0.2 新增，Spec §5.3）
+- POST /api/v1/voice/chat/stream → 长度前缀帧流（v0.2/v0.3 批式 ASR，Spec §5.3）
+- POST /api/v1/voice/stream      → raw PCM chunked 流式上传 + 流式 ASR（v0.4 A2）
+- POST /api/v1/knowledge/reload  → 知识库热重载
 
 打点：每步毫秒计时，X-Timing 响应头 + 每请求一条结构化日志（Spec §5）。
 错误码：按 Spec §5.4 错误处理表完整实现。
@@ -14,10 +16,11 @@ import tempfile
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile
+import numpy as np
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from .asr import ASRModelLoadError, create_asr, read_wav_16k_mono
+from .asr import ASRModelLoadError, create_asr, create_streaming_asr, read_wav_16k_mono
 from .config import load_config
 from .knowledge import KnowledgeBase
 from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
@@ -38,6 +41,7 @@ logging.basicConfig(
 app = FastAPI(title="voice-bridge", version="0.4")
 
 asr = None
+streaming_asr = None
 llm = None
 lightweight_llm = None
 tts = None
@@ -45,6 +49,7 @@ vad = None
 pipeline = None
 knowledge = None
 asr_load_error: str | None = None
+streaming_asr_load_error: str | None = None
 llm_config_error: str | None = None
 tts_load_error: str | None = None
 
@@ -52,12 +57,18 @@ tts_load_error: str | None = None
 @app.on_event("startup")
 async def startup():
     """启动时预加载模型、构造流水线并探测 edge 连通性（Spec §5.1 health）。"""
-    global asr, llm, lightweight_llm, tts, vad, pipeline, knowledge, asr_load_error, llm_config_error, tts_load_error
+    global asr, streaming_asr, llm, lightweight_llm, tts, vad, pipeline, knowledge
+    global asr_load_error, streaming_asr_load_error, llm_config_error, tts_load_error
     try:
         asr = create_asr(cfg)
     except ASRModelLoadError as e:
         asr_load_error = str(e)
         logger.error("ASR 预加载失败: %s", e)
+    try:
+        streaming_asr = create_streaming_asr(cfg)  # v0.4 A2 流式
+    except ASRModelLoadError as e:
+        streaming_asr_load_error = str(e)
+        logger.error("流式 ASR 加载失败: %s", e)
     try:
         llm = create_llm(cfg)  # 慢路径 Hermes
     except LLMConfigError as e:
@@ -294,6 +305,103 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
             "tool_ms": tool_ms,
             "answer_open_ms": open_ms - tool_ms,
             "total_ms": _ms(t0),
+            **{k: v for k, v in pipeline.timing.items() if v is not None},
+        }, ensure_ascii=False))
+
+    return StreamingResponse(
+        body(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Audio-Framing": "wav-length-prefixed",
+            "X-Timing": json.dumps(timing),
+        },
+    )
+
+
+@app.post("/api/v1/voice/stream")
+async def voice_stream(request: Request):
+    """v0.4 A2 流式：raw PCM chunked 上传 + 流式 ASR。
+
+    请求体 = 16k/16bit/mono PCM 字节流（固件边录边发，HTTP chunked）；
+    流结束（按键松开）→ final result → 路由 → LLM → TTS → 长度前缀帧流。
+    """
+    if streaming_asr is None:
+        return _err(503, "service_unavailable", streaming_asr_load_error or "流式 ASR 未就绪")
+    if pipeline is None:
+        return _err(503, "service_unavailable", "流水线未就绪")
+
+    t_req = time.perf_counter()
+    stream = streaming_asr.create_stream()
+    pcm_bytes = 0
+    last_partial = ""
+
+    async def _feed(chunk: bytes):
+        nonlocal pcm_bytes, last_partial
+        pcm_bytes += len(chunk)
+        # 16bit int16 → float32
+        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+        streaming_asr.accept(stream, samples)
+        partial = streaming_asr.partial(stream)
+        if partial and partial != last_partial:
+            last_partial = partial
+            logger.info("ASR partial: %s", partial[:80])
+
+    try:
+        async for chunk in request.stream():
+            await _feed(chunk)
+    except Exception as e:
+        logger.warning("PCM 流接收中断: %s", e)
+
+    # 流结束 = 按键松开 → final result
+    t_final = time.perf_counter()
+    text = streaming_asr.final(stream)
+    asr_ms = _ms(t_req)  # 收到请求 → final 的墙钟（含上传时间，流式识别近乎实时）
+    final_decode_ms = _ms(t_final)
+    logger.info("ASR final (%d chars, %d PCM bytes): %s", len(text), pcm_bytes, text[:80])
+    if not text:
+        return _err(400, "no_speech", "流式 ASR 未识别出有效语音")
+
+    gen = pipeline.run_text(text)
+    try:
+        first_frame = await gen.__anext__()
+    except NoSpeechError as e:
+        return _err(400, "no_speech", str(e))
+    except (LLMError, TTSError) as e:
+        return _err(502, "upstream_error", str(e))
+    except FrameTooLargeError as e:
+        return _err(502, "upstream_error", str(e))
+    except Exception as e:
+        logger.exception("stream 首帧前未知异常")
+        return _err(502, "upstream_error", str(e))
+
+    open_ms = _ms(t_final)  # 按键松开 → 首帧（含路由+LLM+TTS）
+    llm_stats = getattr(llm, "stats", {}) or {}
+    _tool_seen = bool(llm_stats.get("tool_seen"))
+    _first_content_ms = llm_stats.get("first_content_ms")
+    tool_ms = _first_content_ms if (_tool_seen and _first_content_ms is not None) else 0
+    timing = {
+        "open_ms": open_ms,
+        "asr_ms": asr_ms,
+        "final_decode_ms": final_decode_ms,
+        "llm_ttft_ms": pipeline.timing.get("llm_ttft_ms"),
+        "tts_first_ms": pipeline.timing.get("tts_first_ms"),
+        "tool_ms": tool_ms,
+        "answer_open_ms": open_ms - tool_ms,
+        "llm_backend": pipeline.timing.get("llm_backend"),
+        "route": pipeline.timing.get("route"),
+    }
+
+    async def body():
+        yield first_frame
+        async for frame in gen:
+            yield frame
+        logger.info(json.dumps({
+            "event": "request_done",
+            "open_ms": open_ms,
+            "asr_ms": asr_ms,
+            "final_decode_ms": final_decode_ms,
+            "total_ms": _ms(t_req),
             **{k: v for k, v in pipeline.timing.items() if v is not None},
         }, ensure_ascii=False))
 
