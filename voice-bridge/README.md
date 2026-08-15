@@ -1,8 +1,21 @@
-# voice-bridge（语音桥服务 v0.3）
+# voice-bridge（语音桥服务 · 长期 RAG）
 
-PC 端本地 HTTP 语音服务：**Hermes 的语音前端**——接收音频 → VAD → ASR → **Hermes（流式）** → 分句 TTS → 长度前缀帧流返回。voice-bridge 只负责「听」和「说」，「想」交给 Hermes（与微信共用同一 profile 的 persistent memory + skills）。
+PC 端本地 HTTP 语音服务：**Hermes 的语音前端 + 轻量通道三层路由**——接收音频 → VAD → ASR → 路由 → 分句 TTS → 长度前缀帧流返回。
 
-## Hermes 侧准备（v0.3 新增）
+## 三层路由（长期 RAG，Spec A2）
+
+```
+用户语音 → ASR → 路由判定（app/router.py）
+        ├ 纯闲聊/简单问答 → 轻量通道（DeepSeek 裸模型 + USER.md 注入）→ ~1.5s
+        ├ 知识库查询 → BM25 检索 + DeepSeek 裸模型 → ~1.5s
+        └ 需技能/复杂工具 → 完整 Hermes agent（先安抚「我查一下」）→ ~3.5s
+```
+
+- **共用记忆**：轻量通道只读 `~/.hermes/memories/USER.md`（不读 MEMORY.md），与微信共享同一份；慢路径走 Hermes agent 自然共享。
+- **轻量失败兜底**：DeepSeek 不可达 / USER.md 读失败 → 自动降级慢路径 Hermes，不崩。
+- **知识库**：`knowledge/*.md` 每条一个文件；BM25 + jieba 检索；`POST /api/v1/knowledge/reload` 热重载。
+
+## Hermes 侧准备（v0.3 起）
 
 voice-bridge 通过 Hermes gateway 内置的 OpenAI 兼容 API Server 接入（`POST /v1/chat/completions`）。
 
@@ -40,8 +53,9 @@ models/
   sherpa-onnx-sense-voice-zh/      # ASR：SenseVoice（model.int8.onnx + tokens.txt）
   piper/zh_CN-huayan-medium.onnx + .onnx.json   # TTS 兜底
 
-# 4. Hermes API Server key（不入库）：复制到 .env
+# 4. Hermes API Server key + DeepSeek key（不入库）：复制到 .env
 #    HERMES_API_KEY=<与 Hermes 侧 API_SERVER_KEY 相同>
+#    DEEPSEEK_API_KEY=<轻量通道用，DeepSeek 直连>
 ```
 
 ## 启动
@@ -56,7 +70,8 @@ venv\Scripts\python run.py      # 监听 0.0.0.0:8710
 |---|---|
 | `GET /api/v1/health` | `{"status":"ok","asr":"ready","tts":{...},"vad":"enabled","llm":"hermes"}` |
 | `POST /api/v1/voice/chat` | （v0.1 保留，非流式）multipart `audio`=WAV → 完整 WAV bytes + `X-Timing` |
-| `POST /api/v1/voice/chat/stream` | （流式）multipart `audio`=WAV → 长度前缀帧流 |
+| `POST /api/v1/voice/chat/stream` | （流式）multipart `audio`=WAV → 长度前缀帧流（三层路由） |
+| `POST /api/v1/knowledge/reload` | 热重载知识库（重新扫描 `knowledge/*.md`）→ `{"status":"ok","count":N}` |
 
 ## 流式帧协议（v0.2 起不变）
 

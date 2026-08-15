@@ -19,8 +19,10 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .asr import ASRModelLoadError, create_asr, read_wav_16k_mono
 from .config import load_config
-from .llm import LLMConfigError, LLMError, create_llm
+from .knowledge import KnowledgeBase
+from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
 from .pipeline import FrameTooLargeError, NoSpeechError, StreamingPipeline
+from .router import Router
 from .schemas import HealthResponse, TTSHealth
 from .tts import TTSError, create_tts, probe_edge
 from .vad import VADGate
@@ -33,13 +35,15 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
-app = FastAPI(title="voice-bridge", version="0.2")
+app = FastAPI(title="voice-bridge", version="0.4")
 
 asr = None
 llm = None
+lightweight_llm = None
 tts = None
 vad = None
 pipeline = None
+knowledge = None
 asr_load_error: str | None = None
 llm_config_error: str | None = None
 tts_load_error: str | None = None
@@ -48,20 +52,24 @@ tts_load_error: str | None = None
 @app.on_event("startup")
 async def startup():
     """启动时预加载模型、构造流水线并探测 edge 连通性（Spec §5.1 health）。"""
-    global asr, llm, tts, vad, pipeline, asr_load_error, llm_config_error, tts_load_error
+    global asr, llm, lightweight_llm, tts, vad, pipeline, knowledge, asr_load_error, llm_config_error, tts_load_error
     try:
         asr = create_asr(cfg)
     except ASRModelLoadError as e:
         asr_load_error = str(e)
         logger.error("ASR 预加载失败: %s", e)
     try:
-        llm = create_llm(cfg)
+        llm = create_llm(cfg)  # 慢路径 Hermes
     except LLMConfigError as e:
         llm_config_error = str(e)
-        logger.error("LLM 配置失败: %s", e)
+        logger.error("LLM(Hermes) 配置失败: %s", e)
+    try:
+        lightweight_llm = create_lightweight_llm(cfg)  # 轻量通道 DeepSeek
+    except LLMConfigError as e:
+        logger.warning("轻量通道 DeepSeek 配置缺失: %s（轻量/知识库降级走慢路径）", e)
+        lightweight_llm = None
     try:
         tts = create_tts(cfg)
-        # v0.2：启动探测 edge 连通性，如实上报 active_engine/fallback_reason
         await probe_edge(tts, cfg.tts_edge_probe_timeout)
     except Exception as e:
         tts_load_error = str(e)
@@ -73,6 +81,9 @@ async def startup():
         min_speech_frames=cfg.vad_min_speech_frames,
     )
 
+    knowledge = KnowledgeBase(cfg.rag_knowledge_dir)
+    router = Router(tool_keywords=cfg.router_tool_keywords, skill_keywords=cfg.router_skill_keywords)
+
     if asr is not None and llm is not None and tts is not None:
         pipeline = StreamingPipeline(
             asr=asr,
@@ -82,6 +93,11 @@ async def startup():
             max_frame_bytes=cfg.pipeline_max_frame_bytes,
             sentence_max_chars=cfg.pipeline_sentence_max_chars,
             comfort_text=cfg.pipeline_comfort_text,
+            lightweight_llm=lightweight_llm,
+            router=router,
+            rag=knowledge,
+            rag_top_k=cfg.rag_top_k,
+            rag_score_threshold=cfg.rag_score_threshold,
         )
 
 
@@ -100,8 +116,17 @@ def health():
         asr="ready" if asr is not None else "unavailable",
         tts=tts_health,
         vad="enabled" if (vad is not None and vad.enabled) else "disabled",
-        llm=cfg.llm_backend if llm is not None else "unavailable",
+        llm="hermes" if llm is not None else "unavailable",
     )
+
+
+@app.post("/api/v1/knowledge/reload")
+def knowledge_reload():
+    """热重载知识库（长期 RAG，Spec §6.7）：重新扫描 knowledge/*.md 建索引。"""
+    if knowledge is None:
+        return _err(503, "service_unavailable", "知识库未初始化")
+    count = knowledge.reload()
+    return JSONResponse(status_code=200, content={"status": "ok", "count": count})
 
 
 @app.post("/api/v1/voice/chat")

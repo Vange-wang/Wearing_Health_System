@@ -1,8 +1,8 @@
-"""LLM 抽象接口 + Hermes API Server 实现（v0.3，Spec v0.3 §3/§5 A1）。
+"""LLM 抽象接口 + 双后端（长期 RAG，Spec A1 修订「分路」）。
 
-v0.3 起 LLM 后端 = Hermes API Server（OpenAI 兼容），voice-bridge 只负责「听/说」，
-「想」交给 Hermes（与微信共用同一 profile 的 persistent memory + skills）。
-A1 裁决：彻底停用自带 DeepSeek，本文件不存在 DeepSeek 调用路径，不留兜底。
+- 慢路径 = Hermes API Server（OpenAI 兼容），voice-bridge 只负责「听/说」，
+  「想」交给 Hermes（与微信共用同一 profile 的 persistent memory + skills）。
+- 轻量通道 = DeepSeek 裸模型 + USER.md 注入（纯闲聊/简单问答，~1.5s）。
 
 流式细节（Spec §4 / §9 风险表）：
 - Hermes agent 可能先跑工具（SSE 里只有工具指示、无正文），最后才流式出答案。
@@ -14,6 +14,7 @@ A1 裁决：彻底停用自带 DeepSeek，本文件不存在 DeepSeek 调用路�
 import logging
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 logger = logging.getLogger("voice-bridge.llm")
 
@@ -149,6 +150,125 @@ class HermesLLM(LLMBase):
         return _iter()
 
 
+def load_user_profile(path) -> tuple[str, bool]:
+    """只读 Hermes USER.md（用户画像，裁决①：只注入 USER.md，不读 MEMORY.md）。
+
+    返回 (内容, 是否成功)。文件不存在/读取失败 → ("", False)。
+    """
+    try:
+        p = Path(path)
+        if not p.exists():
+            return "", False
+        return p.read_text(encoding="utf-8").strip(), True
+    except Exception:
+        return "", False
+
+
+class LightweightLLM(LLMBase):
+    """轻量通道（长期 RAG A1 修订「分路」）：DeepSeek 裸模型 + USER.md 注入。
+
+    - 直连 DeepSeek（trust_env=False），无工具、无 skills → ~1.5s 开口。
+    - 每次请求读 Hermes USER.md 注入 system prompt（共用记忆；红线：必须注入）。
+    - USER.md 读取失败 → 抛 LLMError（由 pipeline 降级慢路径），不退回无记忆裸聊。
+    """
+
+    name = "deepseek"
+
+    def __init__(self, api_key: str | None, base_url: str, model: str, user_profile_path):
+        if not api_key:
+            raise LLMConfigError(
+                "轻量通道 DeepSeek key 未配置（环境变量/ .env）"
+            )
+        try:
+            import httpx
+            from openai import OpenAI
+        except ImportError as e:
+            raise LLMConfigError(f"openai/httpx 未安装: {e}") from e
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=httpx.Client(trust_env=False, timeout=60.0),
+        )
+        self.model = model
+        self.user_profile_path = user_profile_path
+        self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        logger.info("Lightweight(DeepSeek) ready: %s @ %s", model, base_url)
+
+    def _system_prompt(self) -> str:
+        profile, ok = load_user_profile(self.user_profile_path)
+        if not ok:
+            raise LLMError("USER.md 读取失败（轻量通道共用记忆无法注入）")
+        return (
+            SYSTEM_PROMPT
+            + "\n\n以下是用户的长期画像与偏好（来自共享记忆），回复时自然贴合：\n"
+            + profile
+        )
+
+    def chat(self, user_text: str) -> str:
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self._system_prompt()},
+                    {"role": "user", "content": user_text},
+                ],
+                stream=False,
+            )
+        except LLMError:
+            raise
+        except Exception as e:
+            raise LLMError(f"DeepSeek 调用失败: {e}") from e
+        return (resp.choices[0].message.content or "").strip()
+
+    def stream_chat(self, user_text: str):
+        t0 = time.perf_counter()
+        self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        try:
+            system = self._system_prompt()
+        except LLMError:
+            raise
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_text},
+                ],
+                stream=True,
+            )
+        except Exception as e:
+            raise LLMError(f"DeepSeek 流式调用失败: {e}") from e
+
+        stats = self.stats
+
+        def _iter():
+            try:
+                for chunk in stream:
+                    if stats["first_chunk_ms"] is None:
+                        stats["first_chunk_ms"] = round((time.perf_counter() - t0) * 1000)
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta is None:
+                        continue
+                    content = getattr(delta, "content", None)
+                    if content:
+                        if stats["first_content_ms"] is None:
+                            stats["first_content_ms"] = round((time.perf_counter() - t0) * 1000)
+                        yield content
+            except Exception as e:
+                raise LLMError(f"DeepSeek 流式读取失败: {e}") from e
+
+        return _iter()
+
+
 def create_llm(cfg) -> LLMBase:
-    """工厂：v0.3 起仅 Hermes 后端（A1：不留 DeepSeek 兜底）。"""
+    """工厂：慢路径 = Hermes 后端。"""
     return HermesLLM(cfg.llm_api_key(), cfg.llm_api_server_url, cfg.llm_model)
+
+
+def create_lightweight_llm(cfg) -> LLMBase:
+    """工厂：轻量通道 = DeepSeek 裸模型 + USER.md 注入。"""
+    return LightweightLLM(
+        cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path
+    )

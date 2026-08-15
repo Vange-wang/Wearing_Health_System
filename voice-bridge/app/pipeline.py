@@ -14,7 +14,8 @@ import numpy as np
 
 from .splitter import SentenceBuffer
 from .vad import VADGate
-from .llm import TOOL_SENTINEL
+from .llm import LLMError, TOOL_SENTINEL
+from .router import HERMES, LIGHTWEIGHT, RAG
 
 logger = logging.getLogger("voice-bridge.pipeline")
 
@@ -56,14 +57,24 @@ class StreamingPipeline:
         max_frame_bytes: int = 8 * 1024 * 1024,
         sentence_max_chars: int = 50,
         comfort_text: str = "好的，我查一下。",
+        lightweight_llm=None,
+        router=None,
+        rag=None,
+        rag_top_k: int = 3,
+        rag_score_threshold: float = 0.0,
     ):
         self.asr = asr
-        self.llm = llm
+        self.llm = llm          # 慢路径 Hermes
+        self.lightweight_llm = lightweight_llm  # 轻量通道 DeepSeek（可选）
         self.tts = tts
         self.vad = vad
         self.max_frame_bytes = int(max_frame_bytes)
         self.sentence_max_chars = int(sentence_max_chars)
         self.comfort_text = comfort_text
+        self.router = router
+        self.rag = rag
+        self.rag_top_k = int(rag_top_k)
+        self.rag_score_threshold = float(rag_score_threshold)
         self.timing: dict = {}
 
     async def run(self, samples: np.ndarray, wav_path: Path):
@@ -80,11 +91,12 @@ class StreamingPipeline:
             "tts_total_ms": None,
             "sentence_count": 0,
             "chunk_count": 0,
-            # v0.3 分段计量（Spec §4）：tool_seen / tool_ms / llm_backend / comfort_sent
+            # v0.3 分段计量 + 长期 RAG 路由（Spec §3/§4）
             "llm_backend": getattr(self.llm, "name", "unknown"),
             "tool_seen": False,
             "tool_ms": 0,
             "comfort_sent": False,
+            "route": HERMES,
         }
 
         # 1. VAD
@@ -98,6 +110,26 @@ class StreamingPipeline:
         if not text:
             raise NoSpeechError("ASR 未识别出有效语音")
 
+        # 2.5 路由判定 + RAG 检索（长期 RAG，Spec §3 A2 四步规则）
+        rag_results: list[dict] = []
+        if self.rag is not None:
+            rag_results = self.rag.search(text, top_k=self.rag_top_k, score_threshold=self.rag_score_threshold)
+        route = self.router.route(text, bool(rag_results)) if self.router else HERMES
+        self.timing["route"] = route
+
+        if route == HERMES:
+            selected_llm = self.llm
+            final_text = text
+        else:
+            selected_llm = self.lightweight_llm if self.lightweight_llm is not None else self.llm
+            final_text = text
+            if route == RAG and rag_results:
+                ctx = "\n".join(
+                    f"- {r['doc']['title']}: {r['doc']['text']}" for r in rag_results
+                )
+                final_text = f"【知识库参考，仅据以下内容回答】\n{ctx}\n\n用户问题：{text}"
+        self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
+
         # 3. LLM 流 → 分句 → 逐句 TTS → 帧
         splitter = SentenceBuffer(max_chars=self.sentence_max_chars)
         llm_t0 = time.perf_counter()
@@ -106,6 +138,18 @@ class StreamingPipeline:
         sentence_count = 0
         chunk_count = 0
         comfort_sent = False
+
+        # 轻量/DeepSeek 首步失败（USER.md 读失败 / 网络不可达）→ 降级慢路径（A2 兜底）
+        try:
+            delta_iter = selected_llm.stream_chat(final_text)
+        except LLMError as e:
+            if selected_llm is not self.llm:
+                logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
+                self.timing["route"] = HERMES
+                self.timing["llm_backend"] = getattr(self.llm, "name", "unknown")
+                delta_iter = self.llm.stream_chat(text)
+            else:
+                raise
 
         async def _emit_sentence(sentence: str):
             nonlocal tts_total_ms, sentence_count, chunk_count
@@ -134,7 +178,7 @@ class StreamingPipeline:
             return encode_frame(wav, self.max_frame_bytes)
 
         try:
-            for delta in self.llm.stream_chat(text):
+            for delta in delta_iter:
                 # 慢路径哨兵（工具调用）→ 立即发安抚语第一帧（A5）
                 if delta is TOOL_SENTINEL:
                     if not comfort_sent:
@@ -154,8 +198,8 @@ class StreamingPipeline:
             self.timing["sentence_count"] = sentence_count
             self.timing["chunk_count"] = chunk_count
             self.timing["comfort_sent"] = comfort_sent
-            # v0.3 分段计量：工具期 ≈ 请求→首个正文 delta（工具期间无正文）
-            stats = getattr(self.llm, "stats", {}) or {}
+            # 分段计量：工具期 ≈ 请求→首个正文 delta（工具期间无正文）
+            stats = getattr(selected_llm, "stats", {}) or {}
             tool_seen = bool(stats.get("tool_seen"))
             first_content_ms = stats.get("first_content_ms")
             self.timing["tool_seen"] = tool_seen

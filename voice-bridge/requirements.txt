@@ -1,4 +1,4 @@
-# voice-bridge v0.2 运行依赖（Spec v0.2 §3：继承 v0.1 + numpy 版本约束）
+# voice-bridge 运行依赖（v0.2 继承 + v0.3/长期RAG：numpy + jieba）
 fastapi>=0.110
 uvicorn>=0.29
 sherpa-onnx>=1.10.30
@@ -8,3 +8,4 @@ openai>=1.30
 python-multipart>=0.0.9
 PyYAML>=6.0
 numpy>=1.24  # VAD RMS 计算（v0.1 已通过 sherpa-onnx 间接依赖）
+jieba>=0.42  # 长期 RAG：BM25 关键词检索分词（唯一新增依赖，RAG Spec §2 红线）

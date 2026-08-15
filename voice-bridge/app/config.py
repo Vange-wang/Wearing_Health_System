@@ -45,17 +45,45 @@ class Config:
         self.pipeline_comfort_text = pipeline.get("comfort_text", "好的，我查一下。")
 
         llm = self._data.get("llm", {})
-        # v0.3：LLM 后端 = Hermes API Server（A1：DeepSeek 路径已移除）
-        self.llm_backend = llm.get("backend", "hermes")
+        # 慢路径 = Hermes API Server（v0.3 起）
         self.llm_api_server_url = llm.get("api_server_url", "http://127.0.0.1:8780/v1")
         self.llm_model = llm.get("model", "hermes-agent")
         self.llm_api_key_env = llm.get("api_key_env", "HERMES_API_KEY")
 
+        # 轻量通道 = DeepSeek 裸模型（长期 RAG，A1 修订「分路」）
+        lw = self._data.get("lightweight", {})
+        self.lw_base_url = lw.get("base_url", "https://api.deepseek.com")
+        self.lw_model = lw.get("model", "deepseek-chat")
+        self.lw_api_key_env = lw.get("api_key_env", "DEEPSEEK_API_KEY")
+        self.user_profile_path = Path(
+            lw.get("user_profile_path", str(Path.home() / ".hermes" / "memories" / "USER.md"))
+        ).expanduser()
+
+        # RAG 知识库
+        rag = self._data.get("rag", {})
+        self.rag_knowledge_dir = BASE_DIR / rag.get("knowledge_dir", "knowledge")
+        self.rag_top_k = int(rag.get("top_k", 3))
+        self.rag_score_threshold = float(rag.get("score_threshold", 0.0))
+
+        # 路由判定
+        router = self._data.get("router", {})
+        self.router_tool_keywords = [str(k) for k in router.get("tool_keywords", [
+            "查快递", "写文件", "发邮件", "定时", "搜网页", "搜索", "查天气", "查一下", "帮我查",
+        ])]
+        self.router_skill_keywords = [str(k) for k in router.get("skill_keywords", [])]
+
         self.log_level = self._data.get("log", {}).get("level", "INFO")
 
     def llm_api_key(self) -> str | None:
-        """读取 LLM 后端 API key：环境变量优先，其次项目 .env。"""
-        key = os.environ.get(self.llm_api_key_env)
+        """读取 Hermes API key：环境变量优先，其次项目 .env。"""
+        return self._read_key(self.llm_api_key_env)
+
+    def lightweight_api_key(self) -> str | None:
+        """读取 DeepSeek key（轻量通道）：环境变量优先，其次项目 .env。"""
+        return self._read_key(self.lw_api_key_env)
+
+    def _read_key(self, env_name: str) -> str | None:
+        key = os.environ.get(env_name)
         if key:
             return key
         env_file = BASE_DIR / ".env"
@@ -65,7 +93,7 @@ class Config:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                if k.strip() == self.llm_api_key_env:
+                if k.strip() == env_name:
                     return v.strip().strip('"').strip("'")
         return None
 
