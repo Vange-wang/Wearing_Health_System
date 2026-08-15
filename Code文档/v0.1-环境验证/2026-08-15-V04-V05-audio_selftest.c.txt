@@ -1,0 +1,233 @@
+/*
+ * SPDX-License-Identifier: CC0-1.0
+ *
+ * M0 V-04 (dual-mic ES7210 recording) + V-05 (ES8311 + NS4150 playback)
+ * self-verifying firmware (WorkBuddy, 2026-08-15)
+ *
+ * Loop forever:
+ *   1. short beep         -> "recording starts" audible cue
+ *   2. record 3 s stereo 16 kHz 16-bit from the dual mics (ES7210),
+ *      logging per-channel peak/RMS every 500 ms
+ *   3. short beep         -> "playback starts" audible cue
+ *   4. play the just-recorded audio through the speaker (ES8311 + NS4150)
+ *   5. log V-04/V-05 evidence summary
+ *
+ * Pass criteria (per Spec 2026-08-11-开发环境验证-spec-v0.1):
+ *   V-04: serial log shows ES7210 init OK + recording buffer non-zero
+ *   V-05: speaker audibly plays back the recording
+ */
+
+#include <math.h>
+#include <string.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "bsp/esp-bsp.h"
+#include "esp_codec_dev.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+
+static const char *TAG = "audio_selftest";
+
+#define SAMPLE_RATE   16000
+#define CHANNELS      2
+#define BITS_PER_CH   16
+#define REC_SECONDS   3
+#define REC_BYTES     (SAMPLE_RATE * CHANNELS * (BITS_PER_CH / 8) * REC_SECONDS) /* 192000 */
+#define CHUNK_BYTES   4096
+
+#define BEEP_FREQ_HZ  1000
+#define BEEP_MS       200
+#define BEEP_AMP      8000
+
+static esp_codec_dev_handle_t s_mic = NULL;
+static esp_codec_dev_handle_t s_spk = NULL;
+
+/* Play a short sine beep so the tester knows what phase we are in. */
+static void play_beep(void)
+{
+    /* static: 4 KB on main-task stack (default ~4 KB) would overflow */
+    static int16_t frame[CHUNK_BYTES / 2];
+    int total_frames = SAMPLE_RATE * BEEP_MS / 1000;
+    int chunk_frames = CHUNK_BYTES / (CHANNELS * 2);
+    float phase = 0.0f;
+    const float phase_inc = 2.0f * 3.14159265f * BEEP_FREQ_HZ / SAMPLE_RATE;
+
+    int done = 0;
+    while (done < total_frames) {
+        int n = chunk_frames;
+        if (total_frames - done < n) {
+            n = total_frames - done;
+        }
+        for (int i = 0; i < n; i++) {
+            int16_t v = (int16_t)(BEEP_AMP * sinf(phase));
+            phase += phase_inc;
+            frame[i * 2] = v;
+            frame[i * 2 + 1] = v;
+        }
+        esp_codec_dev_write(s_spk, frame, n * CHANNELS * 2);
+        done += n;
+    }
+}
+
+/* Record REC_SECONDS of stereo audio into rec_buf; log per-channel peaks. */
+static void record_audio(int16_t *rec_buf)
+{
+    int peak_ch0 = 0;
+    int peak_ch1 = 0;
+    long sum_sq_ch0 = 0;
+    long sum_sq_ch1 = 0;
+    int frames_total = 0;
+    int frames_window = 0;
+    int win_peak0 = 0;
+    int win_peak1 = 0;
+
+    ESP_LOGI(TAG, "REC START (%d s, %d Hz, %d ch, %d bit)",
+             REC_SECONDS, SAMPLE_RATE, CHANNELS, BITS_PER_CH);
+
+    int done = 0;
+    while (done < REC_BYTES) {
+        int want = CHUNK_BYTES;
+        if (REC_BYTES - done < want) {
+            want = REC_BYTES - done;
+        }
+        int ret = esp_codec_dev_read(s_mic, (uint8_t *)rec_buf + done, want);
+        if (ret != 0) {
+            ESP_LOGE(TAG, "esp_codec_dev_read FAILED ret=%d", ret);
+            return;
+        }
+        int got = want;  /* v1.1.0 semantics: returns status, fills full request */
+
+        int16_t *p = (int16_t *)((uint8_t *)rec_buf + done);
+        int frames = got / (CHANNELS * 2);
+        for (int i = 0; i < frames; i++) {
+            int a0 = p[i * 2] >= 0 ? p[i * 2] : -p[i * 2];
+            int a1 = p[i * 2 + 1] >= 0 ? p[i * 2 + 1] : -p[i * 2 + 1];
+            if (a0 > win_peak0) win_peak0 = a0;
+            if (a1 > win_peak1) win_peak1 = a1;
+            sum_sq_ch0 += (long)p[i * 2] * p[i * 2];
+            sum_sq_ch1 += (long)p[i * 2 + 1] * p[i * 2 + 1];
+        }
+        frames_window += frames;
+        frames_total += frames;
+        done += got;
+
+        /* Log every ~0.5 s */
+        if (frames_window >= SAMPLE_RATE / 2) {
+            if (win_peak0 > peak_ch0) peak_ch0 = win_peak0;
+            if (win_peak1 > peak_ch1) peak_ch1 = win_peak1;
+            ESP_LOGI(TAG, "REC %4.1fs: ch0_peak=%d ch1_peak=%d",
+                     (double)frames_total / SAMPLE_RATE, win_peak0, win_peak1);
+            win_peak0 = 0;
+            win_peak1 = 0;
+            frames_window = 0;
+        }
+    }
+
+    int rms0 = frames_total > 0 ? (int)sqrtf((float)sum_sq_ch0 / frames_total) : 0;
+    int rms1 = frames_total > 0 ? (int)sqrtf((float)sum_sq_ch1 / frames_total) : 0;
+
+    /* V-04 evidence line */
+    ESP_LOGI(TAG, "V-04 EVIDENCE: rec_bytes=%d ch0_peak=%d ch1_peak=%d ch0_rms=%d ch1_rms=%d %s",
+             done, peak_ch0, peak_ch1, rms0, rms1,
+             (peak_ch0 > 0 && peak_ch1 > 0) ? "BOTH-MICS-NONZERO" : "MIC-DEAD-CHECK");
+}
+
+/* Play the recorded buffer through the speaker. */
+static void playback_audio(const int16_t *rec_buf)
+{
+    ESP_LOGI(TAG, "PLAYBACK START");
+    int done = 0;
+    while (done < REC_BYTES) {
+        int want = CHUNK_BYTES;
+        if (REC_BYTES - done < want) {
+            want = REC_BYTES - done;
+        }
+        int ret = esp_codec_dev_write(s_spk, (const uint8_t *)rec_buf + done, want);
+        if (ret != 0) {
+            ESP_LOGE(TAG, "esp_codec_dev_write FAILED ret=%d", ret);
+            return;
+        }
+        done += want;
+    }
+    /* V-05 evidence line (audibility is confirmed by the tester) */
+    ESP_LOGI(TAG, "V-05 EVIDENCE: playback_bytes=%d written-to-codec", done);
+}
+
+void app_main(void)
+{
+    /* I2C for codec control (ES8311 + ES7210) */
+    ESP_ERROR_CHECK(bsp_i2c_init());
+
+    /* I2S duplex: stereo 16 kHz 16-bit on BSP pins */
+    i2s_std_config_t i2s_cfg = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                        I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = BSP_I2S_MCLK,
+            .bclk = BSP_I2S_SCLK,
+            .ws   = BSP_I2S_LCLK,
+            .dout = BSP_I2S_DOUT,
+            .din  = BSP_I2S_DSIN,
+            .invert_flags = {
+                .mclk_inv = false,
+                .bclk_inv = false,
+                .ws_inv   = false,
+            },
+        },
+    };
+    ESP_ERROR_CHECK(bsp_audio_init(&i2s_cfg));
+
+    /* Codec devices */
+    s_spk = bsp_audio_codec_speaker_init();
+    s_mic = bsp_audio_codec_microphone_init();
+    if (!s_spk || !s_mic) {
+        ESP_LOGE(TAG, "codec init FAILED spk=%p mic=%p", s_spk, s_mic);
+        return;
+    }
+    ESP_LOGI(TAG, "ES7210 (mic ADC) + ES8311 (speaker codec) init OK");
+
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = BITS_PER_CH,
+        .channel         = CHANNELS,
+        .sample_rate     = SAMPLE_RATE,
+    };
+
+    esp_codec_dev_set_out_vol(s_spk, 70);      /* 0-100 */
+    esp_codec_dev_set_in_gain(s_mic, 30.0f);   /* dB, ES7210 MIC gain */
+
+    if (esp_codec_dev_open(s_spk, &fs) != 0) {
+        ESP_LOGE(TAG, "speaker codec open FAILED");
+        return;
+    }
+    if (esp_codec_dev_open(s_mic, &fs) != 0) {
+        ESP_LOGE(TAG, "mic codec open FAILED");
+        return;
+    }
+    ESP_LOGI(TAG, "codecs open OK: %d Hz %d ch %d bit", SAMPLE_RATE, CHANNELS, BITS_PER_CH);
+
+    /* Recording buffer in PSRAM (192 KB) */
+    int16_t *rec_buf = heap_caps_malloc(REC_BYTES, MALLOC_CAP_SPIRAM);
+    if (!rec_buf) {
+        rec_buf = malloc(REC_BYTES);
+    }
+    if (!rec_buf) {
+        ESP_LOGE(TAG, "rec buffer alloc FAILED (%d bytes)", REC_BYTES);
+        return;
+    }
+    ESP_LOGI(TAG, "rec buffer %d bytes @ %s", REC_BYTES,
+             heap_caps_get_allocated_size(rec_buf) ? "heap" : "?");
+
+    ESP_LOGI(TAG, "=== loop: BEEP -> record %ds -> BEEP -> playback ===", REC_SECONDS);
+
+    while (true) {
+        play_beep();                 /* cue: recording starts */
+        record_audio(rec_buf);
+        play_beep();                 /* cue: playback starts */
+        playback_audio(rec_buf);
+        ESP_LOGI(TAG, "--- round done, next round in 2 s ---");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}

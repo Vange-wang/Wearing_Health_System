@@ -10,9 +10,17 @@ tts:
   fallback: piper
   piper_model: models/piper/zh_CN-huayan-medium.onnx
   piper_config: models/piper/zh_CN-huayan-medium.onnx.json
+  edge_probe_timeout: 3
+vad:
+  enabled: true
+  rms_threshold: 0.005
+  min_speech_frames: 10
 llm:
   base_url: https://api.deepseek.com
   model: deepseek-chat
   api_key_env: DEEPSEEK_API_KEY
+pipeline:
+  sentence_max_chars: 50
+  max_frame_bytes: 8388608
 log:
   level: INFO

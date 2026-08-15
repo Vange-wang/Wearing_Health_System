@@ -32,6 +32,16 @@ class Config:
         self.tts_fallback = tts.get("fallback", "piper")
         self.tts_piper_model = BASE_DIR / tts.get("piper_model", "models/piper/zh_CN-huayan-medium.onnx")
         self.tts_piper_config = BASE_DIR / tts.get("piper_config", "models/piper/zh_CN-huayan-medium.onnx.json")
+        self.tts_edge_probe_timeout = float(tts.get("edge_probe_timeout", 3))
+
+        vad = self._data.get("vad", {})
+        self.vad_enabled = bool(vad.get("enabled", True))
+        self.vad_rms_threshold = float(vad.get("rms_threshold", 0.005))
+        self.vad_min_speech_frames = int(vad.get("min_speech_frames", 10))
+
+        pipeline = self._data.get("pipeline", {})
+        self.pipeline_sentence_max_chars = int(pipeline.get("sentence_max_chars", 50))
+        self.pipeline_max_frame_bytes = int(pipeline.get("max_frame_bytes", 8 * 1024 * 1024))
 
         llm = self._data.get("llm", {})
         self.llm_base_url = llm.get("base_url", "https://api.deepseek.com")

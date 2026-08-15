@@ -111,23 +111,82 @@ class PiperTTS(TTSBase):
 
 
 class TTSEngine:
-    """主引擎 + 自动兜底（Spec：edge 失败自动切 piper，日志有 fallback 记录）。"""
+    """主引擎 + 自动兜底（Spec：edge 失败自动切 piper，日志有 fallback 记录）。
+
+    v0.2：额外维护 health 上报字段（configured_primary / active_engine / fallback_reason）。
+    """
 
     def __init__(self, primary: TTSBase, fallback: TTSBase | None):
         self.primary = primary
         self.fallback = fallback
+        self.configured_primary = primary.name
+        self.active_engine = primary.name
+        self.fallback_reason: str | None = None
 
     async def synthesize(self, text: str) -> bytes:
+        # 已知主引擎不可用（启动探测或前次失败已置 fallback_reason）→ 直接走兜底，
+        # 避免每句都白等 edge 慢失败（~1s），这是 open_ms 的关键优化。
+        # 注：进程生命周期内不重试 edge，恢复需重启重新探测（v0.2 阶段可接受）。
+        if (
+            self.fallback is not None
+            and self.fallback_reason
+            and self.active_engine == self.fallback.name
+        ):
+            return await self.fallback.synthesize(text)
         try:
             return await self.primary.synthesize(text)
         except Exception as e:
             if self.fallback is None:
                 raise TTSError(f"{self.primary.name} 失败且无兜底: {e}") from e
+            reason = classify_fallback_reason(e)
+            self.active_engine = self.fallback.name
+            self.fallback_reason = reason
             logger.warning(
                 "TTS fallback: %s failed (%s), switching to %s",
                 self.primary.name, e, self.fallback.name,
             )
             return await self.fallback.synthesize(text)
+
+    def health(self) -> dict:
+        """health 上报（Spec §5.1）：fallback 未生效时省略 fallback_reason。"""
+        d = {
+            "configured_primary": self.configured_primary,
+            "active_engine": self.active_engine,
+        }
+        if self.fallback_reason:
+            d["fallback_reason"] = self.fallback_reason
+        return d
+
+
+def classify_fallback_reason(exc: Exception) -> str:
+    """把上游异常归类为 health 用的 fallback_reason 值。"""
+    msg = str(exc)
+    if "403" in msg:
+        return "edge_403"
+    if "timeout" in msg.lower() or "timed out" in msg.lower():
+        return "edge_timeout"
+    return "edge_unavailable"
+
+
+async def probe_edge(tts: TTSEngine, timeout: float = 3.0) -> None:
+    """启动连通性探测（Spec §5.1）：发最小合成请求，超时/失败即切 active_engine=piper。
+
+    探测结果如实反映到 health；主从策略（edge 主 / piper 兜底）不变。
+    """
+    if tts.configured_primary != "edge" or tts.fallback is None:
+        return
+    try:
+        await asyncio.wait_for(tts.primary.synthesize("测试"), timeout=timeout)
+        tts.active_engine = "edge"
+        tts.fallback_reason = None
+        logger.info("edge probe OK, active_engine=edge")
+    except Exception as e:
+        tts.active_engine = tts.fallback.name
+        tts.fallback_reason = classify_fallback_reason(e)
+        logger.warning(
+            "edge probe failed (%s): active_engine=%s fallback_reason=%s",
+            e, tts.active_engine, tts.fallback_reason,
+        )
 
 
 def create_tts(cfg) -> TTSEngine:

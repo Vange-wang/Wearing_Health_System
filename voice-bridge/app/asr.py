@@ -27,21 +27,27 @@ class ASRBase(ABC):
 
 
 def read_wav_16k_mono(wav_path: Path, sample_rate: int = 16000) -> np.ndarray:
-    """读取并校验 WAV 为 float32 [-1,1]；格式不符抛 ValueError（由上层映射错误码）。"""
-    with wave.open(str(wav_path), "rb") as w:
-        nch = w.getnchannels()
-        sw = w.getsampwidth()
-        fr = w.getframerate()
-        nframes = w.getnframes()
-        if nch != 1 or sw != 2 or fr != sample_rate:
-            raise ValueError(
-                f"bad_audio_format: channels={nch} sampwidth={sw} rate={fr} "
-                f"(expect mono/16bit/{sample_rate})"
-            )
-        duration = nframes / fr
-        if duration > 15:
-            raise ValueError(f"audio_too_long: {duration:.1f}s > 15s")
-        pcm = w.readframes(nframes)
+    """读取并校验 WAV 为 float32 [-1,1]；格式不符/损坏抛 ValueError（由上层映射错误码）。"""
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            nch = w.getnchannels()
+            sw = w.getsampwidth()
+            fr = w.getframerate()
+            nframes = w.getnframes()
+            if nch != 1 or sw != 2 or fr != sample_rate:
+                raise ValueError(
+                    f"bad_audio_format: channels={nch} sampwidth={sw} rate={fr} "
+                    f"(expect mono/16bit/{sample_rate})"
+                )
+            duration = nframes / fr
+            if duration > 15:
+                raise ValueError(f"audio_too_long: {duration:.1f}s > 15s")
+            pcm = w.readframes(nframes)
+    except ValueError:
+        raise
+    except Exception as e:
+        # 损坏/非法 WAV（wave.Error、EOFError 等）→ 统一 bad_audio_format（Spec C1）
+        raise ValueError(f"bad_audio_format: 无法解析 WAV（{e}）") from e
     samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
     return samples
 

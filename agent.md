@@ -1,4 +1,4 @@
-# agent.md — WorkBuddy × Hermes 协作规范（v1.2，2026-08-11）
+# agent.md — WorkBuddy × Hermes 协作规范（v1.3，2026-08-15）
 
 > **本文件是 WorkBuddy 与 Hermes 在本项目中的协作运行时规范。双方每次开工前必须读取本文件。**
 > 与 `AGENTS.md` 的分工：`AGENTS.md` 管项目结构/文档优先级/开发纪律；本文件管**协作流程、模型守卫、交接与审查机制**。冲突时以本文件为准（本文件由 Vange 亲定）。
@@ -11,6 +11,8 @@
 |---|---|---|---|
 | **WorkBuddy** | 代码开发方：按 Spec 实现代码、自测、交付 | **Kimi K3** | **立即停止一切代码开发**，等待 Vange 在 WorkBuddy 模型选择器切换到 Kimi K3 后再继续 |
 | **Hermes** | 代码审查方：审代码、出审查报告、放行 | **DS V4 Pro**（`deepseek-v4-pro`） | 禁止用其他模型出审查结论；审查调用必须带 `--model deepseek-v4-pro` |
+
+> **动工前模型核实（硬门槛，2026-08-15 Vange 强化）**：WorkBuddy 每次代码开发任务动工前，**必须先停下，向 Vange 核实当前模型是否为 Kimi K3**，得到 Vange 确认后才能动工。未核实或模型不符，一律不得写任何代码。这是开工第一道闸，先于任务单确认。
 
 - Hermes 审查调用（**invocation-only 覆盖，不改默认 profile**）：
   ```bash
@@ -152,5 +154,6 @@ REVIEW_PENDING（Hermes 审查，deepseek-v4-pro）
 - **v1.0**（2026-08-11）：初版。Vange 亲定 5 条：角色模型守卫 / Session 铁律 / 3 轮审查工作流 / vange-workflow 五条不变式 / 文件管理。
 - **v1.1**（2026-08-11）：Vange 要求"适当优化"。新增 §2.1 任务单模板、§3.1 状态词汇表、§3.2 DoD 前置、§3.3 轮次计数与 Open Issues 登记、§3.4 交接响应与阻塞规则。核心目标：防无用功返工。
 - **v1.2**（2026-08-11）：Vange 亲定 OI 关闭自动化——审核确认无问题、达到验收标准后责任方自行关闭，无需 Vange 逐条决策。
+- **v1.3**（2026-08-15）：Vange 强化模型守卫——WorkBuddy 每次代码开发动工前必须先向 Vange 核实模型（Kimi K3），确认后动工；同时固化「每次审查必须落盘审查报告」纪律。
 
 *本规范由 Vange 于 2026-08-11 下达，WorkBuddy 起草维护，Hermes 知悉后生效。版本变更需 Vange 同意。*

@@ -1,0 +1,206 @@
+/*
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: CC0-1.0
+ *
+ * M0 V-03 image_display — self-verifying build (WorkBuddy rewrite 2026-08-15)
+ *
+ * Design goals:
+ *  1. Boot self-test: decode the first PNG synchronously and show it on
+ *     screen immediately, so the whole chain (SPIFFS -> LVGL FS POSIX ->
+ *     lodepng decoder -> render) is proven by the boot log + screen alone,
+ *     no touch interaction needed.
+ *  2. Every failure path logs loudly (ESP_LOGE) and LVGL internal warnings
+ *     are visible via CONFIG_LV_LOG_PRINTF=y.
+ *  3. Touch click switches the displayed image (original demo behavior).
+ */
+
+#include <dirent.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "bsp/esp-bsp.h"
+#include "esp_log.h"
+#include "lvgl.h"
+
+static const char *TAG = "main";
+
+static lv_obj_t *g_img = NULL;
+static lv_obj_t *g_status = NULL;
+
+/* Ends with ".png" (case-insensitive)? */
+static bool is_png(const char *name)
+{
+    size_t len = strlen(name);
+    if (len < 5) {
+        return false;
+    }
+    const char *ext = name + len - 4;
+    return (ext[0] == '.') &&
+           (ext[1] == 'p' || ext[1] == 'P') &&
+           (ext[2] == 'n' || ext[2] == 'N') &&
+           (ext[3] == 'g' || ext[3] == 'G');
+}
+
+/*
+ * Synchronously prove the PNG decode chain for a given LVGL FS path.
+ * lv_image_decoder_get_info() runs the decoder's info callback right here,
+ * so a OK result means: FS letter resolved, file opened, PNG header parsed.
+ */
+static bool png_probe(const char *path)
+{
+    lv_image_header_t hdr;
+    lv_result_t res = lv_image_decoder_get_info(path, &hdr);
+    if (res == LV_RESULT_OK) {
+        ESP_LOGI(TAG, "PNG DECODE CHAIN OK: %s -> %ux%u cf=%d",
+                 path, (unsigned)hdr.w, (unsigned)hdr.h, (int)hdr.cf);
+        return true;
+    }
+    ESP_LOGE(TAG, "PNG DECODE CHAIN FAIL: %s (res=%d)", path, (int)res);
+    return false;
+}
+
+/* Decode-check then display a PNG; log everything. */
+static void show_png(const char *path)
+{
+    if (!png_probe(path)) {
+        if (g_status) {
+            lv_label_set_text(g_status, "DECODE FAIL");
+        }
+        return;
+    }
+
+    /* lv_image_set_src() duplicates the path string internally (FILE src) */
+    lv_img_set_src(g_img, path);
+
+    /* Size refresh already happened inside set_src; force layout so the
+     * align below uses the real image size, then log the final geometry. */
+    lv_obj_update_layout(g_img);
+    lv_obj_align(g_img, LV_ALIGN_CENTER, 70, 0);
+    lv_obj_update_layout(g_img);
+
+    ESP_LOGI(TAG, "IMG SHOWN: %s widget %dx%d @ (%d,%d)",
+             path,
+             (int)lv_obj_get_width(g_img), (int)lv_obj_get_height(g_img),
+             (int)lv_obj_get_x(g_img), (int)lv_obj_get_y(g_img));
+
+    if (g_status) {
+        /* Show just the file name (strip "S:/spiffs/") */
+        const char *name = strrchr(path, '/');
+        lv_label_set_text(g_status, name ? name + 1 : path);
+    }
+}
+
+static void btn_event_cb(lv_event_t *event)
+{
+    lv_obj_t *target = (lv_obj_t *) lv_event_get_target(event);
+    const char *file_name = lv_list_get_button_text(lv_obj_get_parent(target), target);
+
+    char path[128];
+    snprintf(path, sizeof(path), "S:/spiffs/%s", file_name);
+
+    ESP_LOGI(TAG, "CLICK: %s", path);
+    show_png(path);
+}
+
+static void image_display(void)
+{
+    lv_group_t *btn_group = NULL;
+    lv_indev_t *indev = lv_indev_get_next(NULL);
+
+    if (indev && ((lv_indev_get_type(indev) == LV_INDEV_TYPE_KEYPAD) ||
+                  (lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER))) {
+        ESP_LOGI(TAG, "Input device type is keypad/encoder");
+        btn_group = lv_group_create();
+        lv_indev_set_group(indev, btn_group);
+    }
+
+    /* Status label, top-right area */
+    g_status = lv_label_create(lv_scr_act());
+    lv_obj_set_width(g_status, 140);
+    lv_label_set_long_mode(g_status, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_align(g_status, LV_ALIGN_TOP_RIGHT, -5, 5);
+    lv_label_set_text(g_status, "boot");
+
+    /* File list on the left */
+    lv_obj_t *list = lv_list_create(lv_scr_act());
+    lv_obj_set_size(list, 170, 210);
+    lv_obj_set_style_border_width(list, 0, LV_STATE_DEFAULT);
+    lv_obj_align(list, LV_ALIGN_LEFT_MID, -15, 10);
+
+    /* Image widget (right/center area) */
+    g_img = lv_img_create(lv_scr_act());
+
+    /* Scan SPIFFS for PNG files */
+    char first_png[128] = {0};
+    int png_count = 0;
+    DIR *dir = opendir("/spiffs");
+    if (!dir) {
+        ESP_LOGE(TAG, "opendir(/spiffs) FAILED");
+        lv_label_set_text(g_status, "NO SPIFFS");
+        return;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!is_png(ent->d_name)) {
+            ESP_LOGI(TAG, "skip non-png: %s", ent->d_name);
+            continue;
+        }
+        png_count++;
+        if (first_png[0] == '\0') {
+            snprintf(first_png, sizeof(first_png), "S:/spiffs/%.100s", ent->d_name);
+        }
+        lv_obj_t *btn = lv_list_add_button(list, LV_SYMBOL_IMAGE, ent->d_name);
+        if (btn_group) {
+            lv_group_add_obj(btn_group, btn);
+        }
+        lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, NULL);
+    }
+    closedir(dir);
+
+    ESP_LOGI(TAG, "SPIFFS scan done: %d png files", png_count);
+
+    /* Boot self-test: decode + show the first PNG immediately */
+    if (first_png[0] != '\0') {
+        ESP_LOGI(TAG, "BOOT SELF-TEST: %s", first_png);
+        show_png(first_png);
+    } else {
+        ESP_LOGE(TAG, "NO PNG FILES FOUND IN SPIFFS");
+        lv_label_set_text(g_status, "NO PNG");
+    }
+}
+
+void app_main(void)
+{
+    /* Initialize I2C (for touch and audio) */
+    bsp_i2c_init();
+
+    /* Initialize display and LVGL */
+    bsp_display_cfg_t cfg = {
+        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
+        .buffer_size = BSP_LCD_H_RES * CONFIG_BSP_LCD_DRAW_BUF_HEIGHT,
+        .double_buffer = 0,
+        .flags = {
+            .buff_dma = true,
+        }
+    };
+    bsp_display_start_with_config(&cfg);
+
+    /* Set display brightness to 100% */
+    bsp_display_backlight_on();
+
+    /* Mount SPIFFS */
+    bsp_spiffs_mount();
+
+    /* All LVGL API calls from app_main must hold the LVGL port lock,
+     * otherwise we race the LVGL render task (lv_inv_area assert / WDT). */
+    if (bsp_display_lock(5000)) {
+        image_display();
+        bsp_display_unlock();
+    } else {
+        ESP_LOGE(TAG, "bsp_display_lock TIMEOUT - UI not created");
+    }
+
+    ESP_LOGI(TAG, "app_main done");
+}
