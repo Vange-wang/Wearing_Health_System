@@ -49,6 +49,29 @@ def client():
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _readiness(monkeypatch):
+    """v0.3 起 stream 路由先做就绪检查（llm None → 500 config_error）。
+
+    本套件是 v0.2 mock/单元回归，不关心真实后端：把 main.llm / main.asr
+    置为非 None 假身，让用例能走到各自 monkeypatch 的 pipeline。
+    """
+    from app.llm import LLMBase
+
+    class _FakeLLM(LLMBase):
+        name = "hermes"
+        stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+
+        def chat(self, t):
+            return ""
+
+        def stream_chat(self, t):
+            return iter([])
+
+    monkeypatch.setattr("app.main.llm", _FakeLLM())
+    monkeypatch.setattr("app.main.asr", object())  # 非 None 占位（就绪检查用）
+
+
 # ---------- T1 · health 返回 ok + tts 嵌套对象 + vad 字段（mock） ----------
 def test_t1_health_format(client):
     resp = client.get("/api/v1/health")
@@ -260,10 +283,7 @@ def _has_llm_key() -> bool:
     return env_file.exists() and "DEEPSEEK_API_KEY" in env_file.read_text(encoding="utf-8")
 
 
-@pytest.mark.skipif(
-    not (ASR_MODEL_DIR.exists() and _has_llm_key()),
-    reason="需 ASR 模型 + DeepSeek key + 网络",
-)
+@pytest.mark.skip(reason="v0.3 起 LLM 后端=Hermes（A1 彻底停用 DeepSeek）；真实全链路验收见 test_v03.py::test_t4")
 def test_t10_real_full_chain(client):
     resp = client.post(
         "/api/v1/voice/chat/stream",

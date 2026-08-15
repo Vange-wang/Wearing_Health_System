@@ -1,6 +1,29 @@
-# voice-bridge（语音桥服务 v0.2）
+# voice-bridge（语音桥服务 v0.3）
 
-PC 端本地 HTTP 语音服务：接收音频 → VAD → ASR → DeepSeek（流式）→ 分句 TTS → 长度前缀帧流返回。开发板（ESP32-S3）与大脑之间的语音通道（v0.2 暂不接 Hermes）。
+PC 端本地 HTTP 语音服务：**Hermes 的语音前端**——接收音频 → VAD → ASR → **Hermes（流式）** → 分句 TTS → 长度前缀帧流返回。voice-bridge 只负责「听」和「说」，「想」交给 Hermes（与微信共用同一 profile 的 persistent memory + skills）。
+
+## Hermes 侧准备（v0.3 新增）
+
+voice-bridge 通过 Hermes gateway 内置的 OpenAI 兼容 API Server 接入（`POST /v1/chat/completions`）。
+
+```bash
+# 1. 启用 API Server（Hermes CLI）
+hermes config set API_SERVER_ENABLED true
+hermes config set API_SERVER_KEY <强密钥>
+
+# 2. 语音通道工具集裁剪（A4）：编辑 ~/.hermes/config.yaml，
+#    platform_toolsets 新增 api_server 键（weixin/cli 键不动）：
+#    platform_toolsets:
+#      api_server: [memory, skills, session_search, web]
+
+# 3. 重启 gateway 生效（微信 bot 会短暂中断数秒）
+
+# 4. 把同一个 API_SERVER_KEY 写进 voice-bridge/.env：
+#    HERMES_API_KEY=<同一个密钥>
+```
+
+- 健康检查：`curl -H "Authorization: Bearer <key>" http://127.0.0.1:8642/health`
+- 按 platform 裁剪实测结论：`../规划文档/技术验证/2026-08-15-A4-按platform裁剪工具集-实测.md`
 
 ## 环境准备
 
@@ -17,8 +40,8 @@ models/
   sherpa-onnx-sense-voice-zh/      # ASR：SenseVoice（model.int8.onnx + tokens.txt）
   piper/zh_CN-huayan-medium.onnx + .onnx.json   # TTS 兜底
 
-# 4. DeepSeek key（不入库）：复制到 .env
-#    DEEPSEEK_API_KEY=sk-xxx
+# 4. Hermes API Server key（不入库）：复制到 .env
+#    HERMES_API_KEY=<与 Hermes 侧 API_SERVER_KEY 相同>
 ```
 
 ## 启动
@@ -31,34 +54,32 @@ venv\Scripts\python run.py      # 监听 0.0.0.0:8710
 
 | 接口 | 说明 |
 |---|---|
-| `GET /api/v1/health` | `{"status":"ok","asr":"ready","tts":{"configured_primary":"edge","active_engine":"piper","fallback_reason":"edge_403"},"vad":"enabled"}` |
+| `GET /api/v1/health` | `{"status":"ok","asr":"ready","tts":{...},"vad":"enabled","llm":"hermes"}` |
 | `POST /api/v1/voice/chat` | （v0.1 保留，非流式）multipart `audio`=WAV → 完整 WAV bytes + `X-Timing` |
-| `POST /api/v1/voice/chat/stream` | （v0.2 新增，流式）multipart `audio`=WAV → 长度前缀帧流 |
+| `POST /api/v1/voice/chat/stream` | （流式）multipart `audio`=WAV → 长度前缀帧流 |
 
-## 流式帧协议（v0.2）
+## 流式帧协议（v0.2 起不变）
 
-- 响应 `Transfer-Encoding: chunked`，应用层分帧（长度前缀帧）：
-  - 每帧 = `[4 字节大端 uint32 长度 N]` + `[N 字节 = 一句完整 WAV（RIFF + 16kHz/16bit/mono PCM）]`
-  - 客户端循环：读 4 字节长度 → 读 N 字节 → 播放该句
-  - EOF = HTTP 响应体结束（无哨兵帧）；最大帧长 8MB 服务端守卫
-- 响应头：
-  - `Content-Type: application/octet-stream`
-  - `X-Audio-Framing: wav-length-prefixed`
-  - `X-Timing: {"open_ms":..., "asr_ms":..., "llm_ttft_ms":..., "tts_first_ms":...}`（open_ms = 开口延迟墙钟，唯一权威口径见 Spec §6.5）
-- 客户端示例见 `measure_v02.py`（流式读取 + 帧解析 + open_ms 实测）
+- 每帧 = `[4 字节大端 uint32 长度 N]` + `[N 字节 = 一句完整 WAV（16kHz/16bit/mono）]`；EOF = 响应体结束；8MB 帧长守卫
+- 响应头：`Content-Type: application/octet-stream` + `X-Audio-Framing: wav-length-prefixed` + `X-Timing`
+
+## 分段计量（v0.3 新增，Spec §4）
+
+`X-Timing` 含：`open_ms` / `asr_ms` / `llm_ttft_ms` / `tts_first_ms` / **`tool_ms`（工具期，如实上报不卡线）** / **`answer_open_ms`（答案期 = open_ms - tool_ms，验收卡 ≤1600ms）** / `llm_backend`。纯闲聊 tool_ms=0。
 
 ## 冒烟测试
 
 ```bash
-venv\Scripts\python -m pytest tests/ -v    # T1~T10，T10 需模型+key+网络
+venv\Scripts\python -m pytest tests/ -v        # v0.2 回归 + v0.3 套件
+# v0.3 真实集成（T4~T6/T8）：需 HERMES_E2E=1 + HERMES_API_KEY + API Server 运行
 ```
 
 ## 说明
 
 - ASR：sherpa-onnx + SenseVoice（本地推理，批式）；VAD：能量门限（静音拦截 → 400 no_speech）
-- LLM：DeepSeek（deepseek-chat，v0.2 流式，直连不配代理），系统提示词见 Spec §7
-- TTS：edge-tts 主（晓晓）/ piper 离线兜底。**edge 现网 403 → piper 实际承载**；已知宕机时短路直走 piper（不重复慢失败）；health 如实上报 active_engine/fallback_reason
-- Spec：`../规划文档/Spec文档/2026-08-11-语音桥-spec-v0.2.md`；自测报告：`../Code文档/v0.2自测报告.md`
+- LLM：**Hermes API Server**（v0.3 A1 彻底替换 DeepSeek，无兜底路径）；与微信共用 persistent memory（每轮独立 session，跨轮记忆靠 persistent memory，A3）；SSE 工具指示事件已过滤不进分句器
+- TTS：edge-tts 主（晓晓）/ piper 离线兜底。**edge 现网 403 → piper 实际承载**；已知宕机时短路直走 piper；health 如实上报
+- Spec：`../规划文档/Spec文档/2026-08-15-语音桥-spec-v0.3.md`；自测报告：`../Code文档/v0.3自测报告.md`
 
 ## 已知环境修复（迁移/重装必读）
 
@@ -84,4 +105,4 @@ edge-tts 6.1.x 固定输出 24kHz mp3，Spec 要求返回 16kHz WAV。
 venv\Scripts\python -c "import pathlib; p=pathlib.Path('venv/Lib/site-packages/edge_tts/communicate.py'); t=p.read_text(encoding='utf-8'); t=t.replace('audio-24khz-48kbitrate-mono-mp3','riff-16khz-16bit-mono-pcm'); p.write_text(t, encoding='utf-8')"
 ```
 
-> edge 恢复状态（OI-004）：edge-tts 6.1.12 现网持续 403（微软封老 client token），v0.2 期间 piper 实际承载，edge 保持配置主引擎；恢复评估（7.x 转码依赖 / 火山讯飞替代）为独立任务，见 Spec §6.3。
+> edge 恢复评估（OI-004，2026-08-15 已出结论）：edge-tts 7.2.8 实测 403 已修复但首音频 0.9~1.2s 劣于 piper 0.2s，**维持 piper 承载**；恢复为可选项，见 `../规划文档/技术验证/2026-08-15-edge-tts恢复评估-OI004.md`。

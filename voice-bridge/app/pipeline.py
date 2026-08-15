@@ -14,6 +14,7 @@ import numpy as np
 
 from .splitter import SentenceBuffer
 from .vad import VADGate
+from .llm import TOOL_SENTINEL
 
 logger = logging.getLogger("voice-bridge.pipeline")
 
@@ -54,6 +55,7 @@ class StreamingPipeline:
         vad: VADGate,
         max_frame_bytes: int = 8 * 1024 * 1024,
         sentence_max_chars: int = 50,
+        comfort_text: str = "好的，我查一下。",
     ):
         self.asr = asr
         self.llm = llm
@@ -61,6 +63,7 @@ class StreamingPipeline:
         self.vad = vad
         self.max_frame_bytes = int(max_frame_bytes)
         self.sentence_max_chars = int(sentence_max_chars)
+        self.comfort_text = comfort_text
         self.timing: dict = {}
 
     async def run(self, samples: np.ndarray, wav_path: Path):
@@ -77,6 +80,11 @@ class StreamingPipeline:
             "tts_total_ms": None,
             "sentence_count": 0,
             "chunk_count": 0,
+            # v0.3 分段计量（Spec §4）：tool_seen / tool_ms / llm_backend / comfort_sent
+            "llm_backend": getattr(self.llm, "name", "unknown"),
+            "tool_seen": False,
+            "tool_ms": 0,
+            "comfort_sent": False,
         }
 
         # 1. VAD
@@ -97,21 +105,41 @@ class StreamingPipeline:
         tts_total_ms = 0.0
         sentence_count = 0
         chunk_count = 0
+        comfort_sent = False
 
         async def _emit_sentence(sentence: str):
             nonlocal tts_total_ms, sentence_count, chunk_count
             t_start = time.perf_counter()
             wav = await self.tts.synthesize(sentence)
             dur_ms = (time.perf_counter() - t_start) * 1000
-            if sentence_count == 0:
+            if chunk_count == 0:
                 self.timing["tts_first_ms"] = round(dur_ms)
             tts_total_ms += dur_ms
             sentence_count += 1
             chunk_count += 1
             return encode_frame(wav, self.max_frame_bytes)
 
+        async def _emit_comfort():
+            """安抚语第一帧（A5）：慢路径先给反馈，不计入正文句数。"""
+            nonlocal tts_total_ms, chunk_count, comfort_sent
+            t_start = time.perf_counter()
+            wav = await self.tts.synthesize(self.comfort_text)
+            dur_ms = (time.perf_counter() - t_start) * 1000
+            if chunk_count == 0:
+                self.timing["tts_first_ms"] = round(dur_ms)
+            tts_total_ms += dur_ms
+            chunk_count += 1
+            comfort_sent = True
+            self.timing["comfort_sent"] = True
+            return encode_frame(wav, self.max_frame_bytes)
+
         try:
             for delta in self.llm.stream_chat(text):
+                # 慢路径哨兵（工具调用）→ 立即发安抚语第一帧（A5）
+                if delta is TOOL_SENTINEL:
+                    if not comfort_sent:
+                        yield await _emit_comfort()
+                    continue
                 if not ttft_done:
                     self.timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
                     ttft_done = True
@@ -125,6 +153,16 @@ class StreamingPipeline:
             self.timing["tts_total_ms"] = round(tts_total_ms)
             self.timing["sentence_count"] = sentence_count
             self.timing["chunk_count"] = chunk_count
+            self.timing["comfort_sent"] = comfort_sent
+            # v0.3 分段计量：工具期 ≈ 请求→首个正文 delta（工具期间无正文）
+            stats = getattr(self.llm, "stats", {}) or {}
+            tool_seen = bool(stats.get("tool_seen"))
+            first_content_ms = stats.get("first_content_ms")
+            self.timing["tool_seen"] = tool_seen
+            if tool_seen and first_content_ms is not None:
+                self.timing["tool_ms"] = (self.timing["asr_ms"] or 0) + first_content_ms
+            else:
+                self.timing["tool_ms"] = 0
             logger.info(json.dumps({
                 "event": "stream_done",
                 **{k: v for k, v in self.timing.items() if v is not None},

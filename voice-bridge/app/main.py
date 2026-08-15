@@ -81,6 +81,7 @@ async def startup():
             vad=vad,
             max_frame_bytes=cfg.pipeline_max_frame_bytes,
             sentence_max_chars=cfg.pipeline_sentence_max_chars,
+            comfort_text=cfg.pipeline_comfort_text,
         )
 
 
@@ -99,6 +100,7 @@ def health():
         asr="ready" if asr is not None else "unavailable",
         tts=tts_health,
         vad="enabled" if (vad is not None and vad.enabled) else "disabled",
+        llm=cfg.llm_backend if llm is not None else "unavailable",
     )
 
 
@@ -191,12 +193,13 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
         return _err(500, "config_error", llm_config_error or "LLM 配置缺失")
     if tts is None:
         return _err(503, "service_unavailable", tts_load_error or "TTS 未就绪")
-    if pipeline is None:
-        return _err(503, "service_unavailable", "流水线未就绪")
 
     suffix = Path(audio.filename or "in.wav").suffix.lower()
     if suffix != ".wav":
         return _err(400, "bad_audio_format", f"仅支持 WAV，收到: {audio.filename}")
+
+    if pipeline is None:
+        return _err(503, "service_unavailable", "流水线未就绪")
 
     data = await audio.read()
     t0 = time.perf_counter()  # 请求体完整接收时刻 = open_ms 唯一起点（Spec §6.5）
@@ -236,11 +239,23 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
     wav_path.unlink(missing_ok=True)
 
     open_ms = _ms(t0)
+    # v0.3 分段计量（Spec §4）：工具期如实上报、答案期卡线。
+    # 首个正文 delta 前的一切（含工具调用）计入 tool_ms；answer_open_ms = open_ms - tool_ms。
+    llm_stats = getattr(llm, "stats", {}) or {}
+    _tool_seen = bool(llm_stats.get("tool_seen"))
+    _first_content_ms = llm_stats.get("first_content_ms")
+    if _tool_seen and _first_content_ms is not None:
+        tool_ms = (pipeline.timing.get("asr_ms") or 0) + _first_content_ms
+    else:
+        tool_ms = 0
     timing = {
         "open_ms": open_ms,
         "asr_ms": pipeline.timing.get("asr_ms"),
         "llm_ttft_ms": pipeline.timing.get("llm_ttft_ms"),
         "tts_first_ms": pipeline.timing.get("tts_first_ms"),
+        "tool_ms": tool_ms,
+        "answer_open_ms": open_ms - tool_ms,
+        "llm_backend": pipeline.timing.get("llm_backend"),
     }
 
     async def body():
@@ -251,6 +266,8 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
         logger.info(json.dumps({
             "event": "request_done",
             "open_ms": open_ms,
+            "tool_ms": tool_ms,
+            "answer_open_ms": open_ms - tool_ms,
             "total_ms": _ms(t0),
             **{k: v for k, v in pipeline.timing.items() if v is not None},
         }, ensure_ascii=False))

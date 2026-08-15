@@ -42,16 +42,19 @@ class Config:
         pipeline = self._data.get("pipeline", {})
         self.pipeline_sentence_max_chars = int(pipeline.get("sentence_max_chars", 50))
         self.pipeline_max_frame_bytes = int(pipeline.get("max_frame_bytes", 8 * 1024 * 1024))
+        self.pipeline_comfort_text = pipeline.get("comfort_text", "好的，我查一下。")
 
         llm = self._data.get("llm", {})
-        self.llm_base_url = llm.get("base_url", "https://api.deepseek.com")
-        self.llm_model = llm.get("model", "deepseek-chat")
-        self.llm_api_key_env = llm.get("api_key_env", "DEEPSEEK_API_KEY")
+        # v0.3：LLM 后端 = Hermes API Server（A1：DeepSeek 路径已移除）
+        self.llm_backend = llm.get("backend", "hermes")
+        self.llm_api_server_url = llm.get("api_server_url", "http://127.0.0.1:8780/v1")
+        self.llm_model = llm.get("model", "hermes-agent")
+        self.llm_api_key_env = llm.get("api_key_env", "HERMES_API_KEY")
 
         self.log_level = self._data.get("log", {}).get("level", "INFO")
 
-    def deepseek_api_key(self) -> str | None:
-        """读取 DeepSeek API key：环境变量优先，其次项目 .env。"""
+    def llm_api_key(self) -> str | None:
+        """读取 LLM 后端 API key：环境变量优先，其次项目 .env。"""
         key = os.environ.get(self.llm_api_key_env)
         if key:
             return key

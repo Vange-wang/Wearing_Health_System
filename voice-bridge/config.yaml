@@ -16,11 +16,13 @@ vad:
   rms_threshold: 0.005
   min_speech_frames: 10
 llm:
-  base_url: https://api.deepseek.com
-  model: deepseek-chat
-  api_key_env: DEEPSEEK_API_KEY
+  backend: hermes
+  api_server_url: http://127.0.0.1:8780/v1
+  model: hermes-agent
+  api_key_env: HERMES_API_KEY
 pipeline:
   sentence_max_chars: 50
   max_frame_bytes: 8388608
+  comfort_text: 好的，我查一下。
 log:
   level: INFO

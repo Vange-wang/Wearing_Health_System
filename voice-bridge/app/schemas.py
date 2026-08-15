@@ -17,6 +17,7 @@ class HealthResponse(BaseModel):
     asr: str           # "ready" | "unavailable"
     tts: TTSHealth
     vad: str           # "enabled" | "disabled"
+    llm: str           # v0.3：LLM 后端名（"hermes" | "unavailable"），如实上报
 
 
 class ErrorResponse(BaseModel):
