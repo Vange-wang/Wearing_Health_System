@@ -5,14 +5,14 @@
 
 | 编号 | 描述 | 严重度 | 状态 | 责任方 | 登记日期 | 关闭日期 |
 |---|---|---|---|---|---|---|
-| OI-001 | health tts 字段只返回主引擎名（如 "edge"），edge 不可用时仍显示 "edge"，未反映实际可用引擎。建议 v0.2 改进为显示实际可用引擎（如 "piper(fallback)"）或连通性检查 | NON_SERIOUS | open | WorkBuddy | 2026-08-11 | — |
+| OI-001 | health tts 字段只返回主引擎名（如 "edge"），edge 不可用时仍显示 "edge"，未反映实际可用引擎。建议 v0.2 改进为显示实际可用引擎（如 "piper(fallback)"）或连通性检查 | NON_SERIOUS | **待确认关闭**（v0.2 已实现 configured_primary/active_engine/fallback_reason + 启动探测，T1/T5 验证，实测 edge_403→piper） | WorkBuddy | 2026-08-11 | 待 Hermes 确认 |
 | OI-002 | Spec §8 ASR 模型资产名 `sherpa-onnx-sense-voice-zh-20240418` 不存在，需修正为 `sense-voice-zh-en-ja-ko-yue-int8-2024-07-17` | NON_SERIOUS | **closed** | Hermes | 2026-08-11 | 2026-08-11 |
 | OI-003 | main.py:80 TTS 未就绪时的 error detail 硬编码 "TTS 未就绪"，不像 ASR/LLM 用启动时捕获的具体错误信息（asr_load_error/llm_config_error）。建议统一 | NON_SERIOUS | **closed** | WorkBuddy | 2026-08-11 | 2026-08-11 |
-| OI-004 | edge-tts 主引擎不可用（微软封 6.x token, HTTP 403），v0.1 实际 piper 独撑 TTS。v0.2 需评估恢复方案：升 edge-tts 7.x+音频转码（需引入 ffmpeg/pydub，评估是否违反依赖红线）或替换为火山/讯飞云 TTS | NON_SERIOUS | open | Hermes | 2026-08-11 | — |
+| OI-004 | edge-tts 主引擎不可用（微软封 6.x token, HTTP 403），v0.1 实际 piper 独撑 TTS。v0.2 需评估恢复方案：升 edge-tts 7.x+音频转码（需引入 ffmpeg/pydub，评估是否违反依赖红线）或替换为火山/讯飞云 TTS | NON_SERIOUS | **待确认关闭**（2026-08-15 评估完成：7.2.8 实测 403 已修复可合成，但首音频 0.9~1.2s 劣于 piper 0.2s，恢复反而拖垮 open_ms；建议维持 piper。报告：规划文档/技术验证/2026-08-15-edge-tts恢复评估-OI004.md） | Hermes | 2026-08-11 | 待 Hermes 确认 |
 | OI-005 | piper-tts 1.6.0 Windows espeak-ng-data 打包 bug（编译机硬编码路径），当前通过目录联接（junction）修复。迁移机器/重装 venv 时需重建 junction，建议 README 补操作步骤 | NON_SERIOUS | **closed** | WorkBuddy | 2026-08-11 | 2026-08-11 |
 | OI-006 | edge-tts venv vendor patch（communicate.py outputFormat 改为 riff-16khz-16bit-mono-pcm），重装 edge-tts 会覆盖。建议 README 补充 patch 恢复步骤或在 requirements-dev.txt 中加自动化脚本 | NON_SERIOUS | **closed** | WorkBuddy | 2026-08-11 | 2026-08-11 |
-| OI-007 | SenseVoice 对纯静音/低能量音频会幻觉出噪声字符（如韩文字符），当前通过 0 帧 WAV 触发 no_speech 兜底。v0.2 建议加 VAD 或能量门限做前置过滤 | NON_SERIOUS | open | Hermes | 2026-08-11 | — |
+| OI-007 | SenseVoice 对纯静音/低能量音频会幻觉出噪声字符（如韩文字符），当前通过 0 帧 WAV 触发 no_speech 兜底。v0.2 建议加 VAD 或能量门限做前置过滤 | NON_SERIOUS | **待确认关闭**（v0.2 已实现能量门限 VADGate，静音→400 no_speech 不耗 token，T2/T7 验证） | Hermes | 2026-08-11 | 待 Hermes 确认 |
 
 ---
 
-*最后更新：2026-08-11 · 审查轮次：第2轮/共3轮 · 关联报告：2026-08-11-审查-第2轮.md*
+*最后更新：2026-08-15 · v0.2 REVIEW_PASS 后：OI-001/004/007 实现完毕待 Hermes 确认关闭 · 关联：2026-08-15-v0.2自测报告-终审报告.md、规划文档/技术验证/2026-08-15-edge-tts恢复评估-OI004.md*
