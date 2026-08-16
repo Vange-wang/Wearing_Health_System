@@ -5,7 +5,7 @@
 - Issue ID：ISSUE-0003
 - 类型：feature / configuration（功能配置缺口）
 - 状态：open
-- 优先级：P3
+- 优先级：P2
 - 来源：v0.3 遗留 T6 技能触发未测；长期 RAG Spec §3「技能触发词清单由 WorkBuddy 从 Hermes 已装 skills 抽取维护」
 - owner：WorkBuddy（开发员）
 - 关联：`voice-bridge/config.yaml` `router.skill_keywords`（当前为空 `[]`）；ISSUE-0001（慢路径回归第二档同源）
@@ -27,3 +27,4 @@ skill_keywords 配置完成 + 语音触发技能走慢路径的端到端验证�
 ## 处理记录
 
 - 2026-08-16：由 Hermes 登记为 open（P3，v0.3 T6 与长期 RAG 慢路径回归第二档的延续）。
+- 2026-08-16：Hermes 对齐升级 **P2**——实时查询编造问题（系统对「查天气」编造）暴露 skill_keywords 空 + 工具调用未生效的严重性，技能触发（含 Hermes tool-calling 打通）是正解路径（见 `2026-08-16-实时查询能力缺口-对齐回复.md`）。
