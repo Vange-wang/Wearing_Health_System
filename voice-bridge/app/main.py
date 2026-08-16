@@ -10,6 +10,7 @@
 打点：每步毫秒计时，X-Timing 响应头 + 每请求一条结构化日志（Spec §5）。
 错误码：按 Spec §5.4 错误处理表完整实现。
 """
+import asyncio
 import json
 import logging
 import tempfile
@@ -79,6 +80,9 @@ async def startup():
     except LLMConfigError as e:
         logger.warning("轻量通道 DeepSeek 配置缺失: %s（轻量/知识库降级走慢路径）", e)
         lightweight_llm = None
+    if lightweight_llm is not None:
+        # A7：后台预热 DeepSeek（消除首次按键冷启动 ~2s 尖峰）
+        asyncio.create_task(asyncio.to_thread(lightweight_llm.warmup))
     try:
         tts = create_tts(cfg)
         await probe_edge(tts, cfg.tts_edge_probe_timeout)

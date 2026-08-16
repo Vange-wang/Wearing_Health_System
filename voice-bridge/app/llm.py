@@ -261,6 +261,23 @@ class LightweightLLM(LLMBase):
 
         return _iter()
 
+    def warmup(self) -> None:
+        """A7 启动预热：发最小请求（max_tokens=1），预热 TLS 连接 + 首 token。
+
+        把「拨号 + 叫醒」的一次性冷启动成本花在服务启动时刻，
+        首次按键即热连接（省 ~2s）。同步阻塞，调用方放后台线程。
+        """
+        try:
+            self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": "你好"}],
+                max_tokens=1,
+                stream=False,
+            )
+            logger.info("DeepSeek 预热完成（连接 + 首 token 就绪）")
+        except Exception as e:
+            logger.warning("DeepSeek 预热失败（首次请求付冷启动，不影响服务）: %s", e)
+
 
 def create_llm(cfg) -> LLMBase:
     """工厂：慢路径 = Hermes 后端。"""
