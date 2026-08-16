@@ -83,6 +83,8 @@ async def startup():
     if lightweight_llm is not None:
         # A7：后台预热 DeepSeek（消除首次按键冷启动 ~2s 尖峰）
         asyncio.create_task(asyncio.to_thread(lightweight_llm.warmup))
+        # 方案1：周期心跳保温（保持 TLS 连接热，llm_ttft 稳定 ~500ms）
+        lightweight_llm.start_heartbeat()
     try:
         tts = create_tts(cfg)
         await probe_edge(tts, cfg.tts_edge_probe_timeout)
@@ -99,6 +101,20 @@ async def startup():
     knowledge = KnowledgeBase(cfg.rag_knowledge_dir)
     router = Router(tool_keywords=cfg.router_tool_keywords, skill_keywords=cfg.router_skill_keywords)
 
+    # 慢路径安抚语预合成（query 池，随机轮换）。快路径 ack 已删除（首字延迟达标）。
+    acknowledgements = {"query": []}
+    ack_texts = cfg.pipeline_ack_query
+    if tts is not None and ack_texts:
+        async def _synth_one(text):
+            try:
+                return await tts.synthesize(text)
+            except Exception as e:
+                logger.warning("安抚语预合成失败(%s): %s", text, e)
+                return None
+        results = await asyncio.gather(*[_synth_one(t) for t in ack_texts])
+        acknowledgements["query"] = [r for r in results if r is not None]
+        logger.info("安抚语预合成完成：%d/%d 个", len(acknowledgements["query"]), len(ack_texts))
+
     if asr is not None and llm is not None and tts is not None:
         pipeline = StreamingPipeline(
             asr=asr,
@@ -114,6 +130,7 @@ async def startup():
             rag=knowledge,
             rag_top_k=cfg.rag_top_k,
             rag_score_threshold=cfg.rag_score_threshold,
+            acknowledgements=acknowledgements,
         )
 
 

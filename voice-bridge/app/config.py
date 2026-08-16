@@ -46,6 +46,13 @@ class Config:
         self.pipeline_max_frame_bytes = int(pipeline.get("max_frame_bytes", 8 * 1024 * 1024))
         self.pipeline_comfort_text = pipeline.get("comfort_text", "好的，我查一下。")
         self.pipeline_sentence_gap_ms = int(pipeline.get("sentence_gap_ms", 300))
+        # 慢路径安抚语池（query，随机轮换，启动时预合成缓存）。快路径 ack 已删除。
+        ack_cfg = pipeline.get("acknowledgements", {})
+        if isinstance(ack_cfg, dict):
+            self.pipeline_ack_query = [str(s) for s in ack_cfg.get("query", [])]
+        else:
+            # 兼容旧格式（扁平列表 → 全部归为 query 安抚语）
+            self.pipeline_ack_query = [str(s) for s in ack_cfg]
 
         llm = self._data.get("llm", {})
         # 慢路径 = Hermes API Server（v0.3 起）

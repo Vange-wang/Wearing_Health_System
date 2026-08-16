@@ -8,10 +8,33 @@ v0.4 A5 裁决：TTS 换 edge-tts 7.2.8（修复 403），弃 piper 兜底（edg
 import asyncio
 import io
 import logging
+import ssl
 import wave
 from abc import ABC, abstractmethod
 
+import aiohttp
+import certifi
+
+# vendored 最小协议（方向1 预连接）：复用 edge-tts 内部的 wire 协议函数，
+# 只做「建 WSS + 发 speech.config」，把「发 ssml」推迟到首句到达，与 LLM 生成并行。
+from edge_tts.communicate import (  # noqa: E402
+    connect_id,
+    date_to_string,
+    escape,
+    get_headers_and_data,
+    mkssml,
+    remove_incompatible_characters,
+    split_text_by_byte_length,
+    ssml_headers_plus_data,
+)
+from edge_tts.constants import SEC_MS_GEC_VERSION, WSS_HEADERS, WSS_URL  # noqa: E402
+from edge_tts.data_classes import TTSConfig  # noqa: E402
+from edge_tts.drm import DRM  # noqa: E402
+
 logger = logging.getLogger("voice-bridge.tts")
+
+# 与 edge_tts.communicate._SSL_CTX 一致（certifi 证书，避免系统证书缺失导致握手失败）
+_SSL_CTX = ssl.create_default_context(cafile=certifi.where())
 
 
 class TTSError(Exception):
@@ -81,11 +104,130 @@ def _mp3_to_wav16k(mp3: bytes) -> bytes:
     return _trim_silence(wrap_pcm_as_wav(pcm, 16000))
 
 
+def _speech_config_msg() -> str:
+    """speech.config 消息（与 edge_tts.communicate.__stream 的 send_command_request 一致）。"""
+    return (
+        f"X-Timestamp:{date_to_string()}\r\n"
+        "Content-Type:application/json; charset=utf-8\r\n"
+        "Path:speech.config\r\n\r\n"
+        '{"context":{"synthesis":{"audio":{"metadataoptions":{'
+        '"sentenceBoundaryEnabled":"true","wordBoundaryEnabled":"false"'
+        "},"
+        '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"'
+        "}}}}\r\n"
+    )
+
+
+class _EdgePreconnect:
+    """预建好的 edge WSS 连接（已发 speech.config），供首句发 ssml 流式合成。
+
+    方向1（延迟优化）：建连（~0.65s）与 LLM 首句生成并行，首句到达即发 ssml，
+    净等待降到 ~0.75s，省掉每句都付的建连成本。
+    """
+
+    def __init__(self, session, ws, tts_config: TTSConfig):
+        self._session = session
+        self._ws = ws
+        self._tts_config = tts_config
+
+    def _wire_ssml(self, text: str) -> str:
+        # 与 edge_tts.Communicate.__init__ 相同的文本处理链（escape + 去不兼容字符 + 分片）
+        escaped = escape(remove_incompatible_characters(text))
+        parts = list(split_text_by_byte_length(escaped, 4096))
+        return mkssml(self._tts_config, parts[0])
+
+    async def stream_synthesize(
+        self,
+        text: str,
+        min_segment_samples: int = 800,
+        later_min_segment_samples: int = 4800,
+    ):
+        """用预建连接发 ssml，流式解码 yield WAV 段（与 EdgeTTS.stream_synthesize 对齐）。"""
+        import miniaudio
+
+        mp3_buf = b""
+        emitted = 0
+        first_sent = False
+        got_audio = False
+        try:
+            await self._ws.send_str(
+                ssml_headers_plus_data(connect_id(), date_to_string(), self._wire_ssml(text))
+            )
+            async for msg in self._ws:
+                if msg.type == aiohttp.WSMsgType.BINARY and len(msg.data) >= 2:
+                    hlen = int.from_bytes(msg.data[:2], "big")
+                    params, data = get_headers_and_data(msg.data, hlen)
+                    if params.get(b"Path") == b"audio" and data:
+                        got_audio = True
+                        mp3_buf += data
+                        try:
+                            dec = miniaudio.decode(
+                                mp3_buf,
+                                output_format=miniaudio.SampleFormat.SIGNED16,
+                                nchannels=1,
+                                sample_rate=16000,
+                            )
+                        except Exception:
+                            continue  # 首段 mp3 尚不足以解码，等下个 chunk
+                        samples = dec.samples
+                        new_n = len(samples) - emitted
+                        threshold = later_min_segment_samples if first_sent else min_segment_samples
+                        if new_n >= threshold:
+                            yield wrap_pcm_as_wav(samples[emitted:].tobytes(), 16000)
+                            emitted = len(samples)
+                            first_sent = True
+                elif msg.type == aiohttp.WSMsgType.TEXT:
+                    d = msg.data.encode("utf-8")
+                    params, _ = get_headers_and_data(d, d.find(b"\r\n\r\n"))
+                    if params.get(b"Path") == b"turn.end":
+                        break
+        except Exception as e:
+            # 对齐原版：首段未产出即失败 → 抛 TTSError（上层 _drain_stream 捕获后回退用时建连）；
+            # 已发部分帧后失败 → 静默结束（已发帧照常播放）
+            if emitted == 0:
+                raise TTSError(f"edge 预连接流式合成失败: {e}") from e
+            logger.warning("edge 预连接流式中途失败（已发 %d samples，已发帧不受影响）: %s", emitted, e)
+            return
+        # flush 剩余（含整句不足首段阈值的情况）
+        if mp3_buf:
+            try:
+                dec = miniaudio.decode(
+                    mp3_buf,
+                    output_format=miniaudio.SampleFormat.SIGNED16,
+                    nchannels=1,
+                    sample_rate=16000,
+                )
+                full = dec.samples
+                if len(full) > emitted:
+                    yield wrap_pcm_as_wav(full[emitted:].tobytes(), 16000)
+            except Exception as e:
+                logger.warning("edge 预连接流式 flush 解码失败: %s", e)
+        if not got_audio:
+            raise TTSError("edge 预连接未收到音频")
+
+    async def close(self) -> None:
+        try:
+            await self._ws.close()
+        except Exception:
+            pass
+        try:
+            await self._session.close()
+        except Exception:
+            pass
+
+
 class EdgeTTS(TTSBase):
     name = "edge"
 
-    def __init__(self, voice: str = "zh-CN-XiaoxiaoNeural"):
+    def __init__(
+        self,
+        voice: str = "zh-CN-XiaoxiaoNeural",
+        rate: str = "-5%",
+        pitch: str = "+0Hz",
+    ):
         self.voice = voice
+        self.rate = rate    # 语速稍慢 5%，更像从容说话（人设情感化，Hermes 起草）
+        self.pitch = pitch  # 音调默认；想更活泼可 +3Hz
 
     async def synthesize(self, text: str) -> bytes:
         import edge_tts
@@ -95,7 +237,8 @@ class EdgeTTS(TTSBase):
             try:
                 chunks: list[bytes] = []
                 # 每次新建连接（不复用 connector：edge 服务端会关闲置连接，复用导致 Session is closed）
-                communicate = edge_tts.Communicate(text=text, voice=self.voice)
+                # 注意：edge-tts 7.2.8 已移除自定义 SSML 支持（escape 掉 <>&），express-as 不可用
+                communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch)
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         chunks.append(chunk["data"])
@@ -115,6 +258,100 @@ class EdgeTTS(TTSBase):
             return _mp3_to_wav16k(mp3)
         raise last_err or TTSError("edge-tts 合成失败")
 
+    async def stream_synthesize(
+        self,
+        text: str,
+        min_segment_samples: int = 800,
+        later_min_segment_samples: int = 4800,
+    ):
+        """方案2（延迟优化）：流式合成，yield 多段 WAV，首段在首 chunk 到达即产出。
+
+        原理：edge `stream()` 边合成边返回 mp3 chunk；miniaudio 对「累积的 mp3」可分段解码，
+        且前缀 100% 一致（实测），故每累积到阈值即发一段增量 PCM。
+        - 首段阈值小（50ms）：首 chunk 到达即发首帧，压低首响延迟。
+        - 后续段阈值大（300ms）：减少帧数，避免固件逐帧播放的断续。
+
+        注意：流式不裁静音（edge 前导 ~0.19s 会进入首段），接受；句间间隔由 pipeline 保证。
+        """
+        import edge_tts
+        import miniaudio
+
+        mp3_buf = b""
+        emitted = 0  # 已产出的 sample 数（增量游标，靠解码前缀一致性保证无重复/无缺口）
+        first_sent = False
+        try:
+            communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch)
+            async for chunk in communicate.stream():
+                if chunk["type"] != "audio":
+                    continue
+                mp3_buf += chunk["data"]
+                try:
+                    dec = miniaudio.decode(
+                        mp3_buf,
+                        output_format=miniaudio.SampleFormat.SIGNED16,
+                        nchannels=1,
+                        sample_rate=16000,
+                    )
+                except Exception:
+                    continue  # 首段 mp3 尚不足以解码，等下个 chunk
+                samples = dec.samples
+                new_n = len(samples) - emitted
+                threshold = later_min_segment_samples if first_sent else min_segment_samples
+                if new_n >= threshold:
+                    yield wrap_pcm_as_wav(samples[emitted:].tobytes(), 16000)
+                    emitted = len(samples)
+                    first_sent = True
+        except Exception as e:
+            if emitted == 0:
+                raise TTSError(f"edge-tts 流式合成失败: {e}")
+            # 已发部分帧后失败：静默结束（已发帧照常播放，上层不感知中断）
+            logger.warning("edge 流式合成中途失败（已发 %d samples，已发帧不受影响）: %s", emitted, e)
+            return
+        # flush 剩余（含整句不足首段阈值的情况）
+        if mp3_buf:
+            try:
+                dec = miniaudio.decode(
+                    mp3_buf,
+                    output_format=miniaudio.SampleFormat.SIGNED16,
+                    nchannels=1,
+                    sample_rate=16000,
+                )
+                full = dec.samples
+                if len(full) > emitted:
+                    yield wrap_pcm_as_wav(full[emitted:].tobytes(), 16000)
+            except Exception as e:
+                logger.warning("edge 流式 flush 解码失败: %s", e)
+
+    async def open_preconnect(self, timeout: float = 2.0):
+        """方向1：预建 WSS + 发 speech.config（与 LLM 首句生成并行），返回可复用连接。
+
+        - trust_env=False：不读环境代理变量（AGENTS.md「任何环境不得配置代理」红线）。
+        - 失败返回 None，上层无缝回退「用时建连」路径，无正确性风险。
+        """
+        session = aiohttp.ClientSession(trust_env=False)
+        try:
+            ws = await asyncio.wait_for(
+                session.ws_connect(
+                    f"{WSS_URL}&ConnectionId={connect_id()}"
+                    f"&Sec-MS-GEC={DRM.generate_sec_ms_gec()}"
+                    f"&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}",
+                    compress=15,
+                    headers=DRM.headers_with_muid(WSS_HEADERS),
+                    ssl=_SSL_CTX,
+                ),
+                timeout,
+            )
+            await ws.send_str(_speech_config_msg())
+            tts_config = TTSConfig(self.voice, self.rate, "+0%", self.pitch, "SentenceBoundary")
+            return _EdgePreconnect(session, ws, tts_config)
+        except Exception as e:
+            logger.warning("edge 预连接失败，回退用时建连: %s", e)
+            try:
+                await session.close()
+            except Exception:
+                pass
+            return None
+
 
 class TTSEngine:
     """edge 唯一（A5：弃 piper）。edge 故障抛 TTSError（上层 502），不兜底。
@@ -129,6 +366,16 @@ class TTSEngine:
 
     async def synthesize(self, text: str) -> bytes:
         return await self.primary.synthesize(text)  # 故障抛 TTSError → 502
+
+    def stream_synthesize(self, text: str, min_segment_samples: int = 800):
+        """方案2：流式合成（返回 async generator），供 pipeline 边收边发帧。"""
+        return self.primary.stream_synthesize(text, min_segment_samples)
+
+    async def open_preconnect(self, timeout: float = 2.0):
+        """方向1：预建连接（委托 primary）。primary 不支持时返回 None。"""
+        if hasattr(self.primary, "open_preconnect"):
+            return await self.primary.open_preconnect(timeout)
+        return None
 
     def health(self) -> dict:
         return {

@@ -34,5 +34,7 @@ pipeline:
   max_frame_bytes: 8388608
   comfort_text: 好的，我查一下。
   sentence_gap_ms: 300
+  acknowledgements:
+    query: [稍等，我帮你查一下, 好的，这就帮你查，请稍等]
 log:
   level: INFO

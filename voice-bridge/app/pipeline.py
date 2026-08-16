@@ -7,6 +7,7 @@ Pipeline：VAD → ASR(批式) → LLM 流 → SentenceBuffer 分句 → 逐句 
 import asyncio
 import json
 import logging
+import random
 import struct
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ import numpy as np
 from .splitter import SentenceBuffer
 from .vad import VADGate
 from .llm import LLMError, TOOL_SENTINEL
+from .tts import TTSError
 from .router import HERMES, LIGHTWEIGHT, RAG
 
 logger = logging.getLogger("voice-bridge.pipeline")
@@ -64,6 +66,7 @@ class StreamingPipeline:
         rag=None,
         rag_top_k: int = 3,
         rag_score_threshold: float = 0.0,
+        acknowledgements: dict | None = None,
     ):
         self.asr = asr
         self.llm = llm          # 慢路径 Hermes
@@ -78,6 +81,9 @@ class StreamingPipeline:
         self.rag = rag
         self.rag_top_k = int(rag_top_k)
         self.rag_score_threshold = float(rag_score_threshold)
+        # 慢路径安抚语池（预合成 WAV，query 池随机轮换）。快路径 ack 已删除（首字达标后不需要）。
+        self.acknowledgements = acknowledgements or {}
+        self._last_ack_idx: dict = {}
         self.timing: dict = {}
 
     def _init_timing(self):
@@ -96,6 +102,22 @@ class StreamingPipeline:
             "comfort_sent": False,
             "route": HERMES,
         }
+
+    def _pick_ack(self, text: str) -> bytes | None:
+        """慢路径安抚语：从 query 池随机轮换（避免连续重复）。
+
+        快路径 ack 已删除（首字延迟达标后无需应声）；慢路径（Hermes 联网搜索）
+        首字仍需 10~18s，故保留安抚语先行，避免干等。
+        """
+        pool = self.acknowledgements.get("query") or []
+        if not pool:
+            return None
+        n = len(pool)
+        idx = random.randrange(n)
+        if n > 1 and idx == self._last_ack_idx.get("query", -1):
+            idx = (idx + 1) % n
+        self._last_ack_idx["query"] = idx
+        return pool[idx]
 
     async def run(self, samples: np.ndarray, wav_path: Path):
         """批式路径（v0.2/v0.3 兼容）：VAD → 批式 ASR(SenseVoice) → 下游。"""
@@ -145,6 +167,18 @@ class StreamingPipeline:
                 final_text = f"【知识库参考，仅据以下内容回答】\n{ctx}\n\n用户问题：{text}"
         self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
 
+        # 方向1：快路径路由判定后立即预建 edge 连接（与 LLM 首句生成并行，省 ~0.65s 建连）。
+        # 慢路径（Hermes）首句 >2s 才到，预连接会空闲恶化（C3 实测 2s 空闲净等待反而变慢），
+        # 且已有安抚语先行，故慢路径不预连。
+        preconn_state = None
+        if route != HERMES and self.tts is not None and hasattr(self.tts, "open_preconnect"):
+            preconn_state = {
+                "task": asyncio.create_task(self.tts.open_preconnect()),
+                "used": False,
+                "disabled": False,
+                "lock": asyncio.Lock(),
+            }
+
         # LLM 流 → 分句 → 逐句 TTS → 帧
         splitter = SentenceBuffer(max_chars=self.sentence_max_chars)
         llm_t0 = time.perf_counter()
@@ -163,6 +197,9 @@ class StreamingPipeline:
                 self.timing["route"] = HERMES
                 self.timing["llm_backend"] = getattr(self.llm, "name", "unknown")
                 delta_iter = self.llm.stream_chat(text)
+                # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
+                if preconn_state is not None:
+                    preconn_state["disabled"] = True
             else:
                 raise
 
@@ -177,6 +214,42 @@ class StreamingPipeline:
         tts_wall_t0 = None
         total_sentences = [0]
 
+        async def _claim_preconn():
+            """方向1：原子 claim 预连接（仅首个正文句能拿到），失败/已被用/已禁用返回 None。"""
+            if preconn_state is None or preconn_state["disabled"]:
+                return None
+            async with preconn_state["lock"]:
+                if preconn_state["used"]:
+                    return None
+                preconn_state["used"] = True
+            try:
+                return await preconn_state["task"]
+            except Exception:
+                return None
+
+        async def _drain_stream(seg_iter, seq, kind, t0):
+            """流式产帧到 frame_queue。返回 (seg_i, last_seg, emitted_any)。
+
+            emitted_any=False 表示首段未产出即失败，调用方可回退重合成。
+            """
+            nonlocal tts_first_recorded
+            seg_i = 0
+            last_seg = None
+            emitted_any = False
+            try:
+                async for seg_wav in seg_iter:
+                    if not tts_first_recorded:
+                        self.timing["tts_first_ms"] = round((time.perf_counter() - t0) * 1000)
+                        tts_first_recorded = True
+                    emitted_any = True
+                    if last_seg is not None:
+                        await frame_queue.put(((seq, seg_i), kind, last_seg, False))
+                        seg_i += 1
+                    last_seg = seg_wav
+            except TTSError as e:
+                logger.error("TTS 流式合成失败: %s", e)
+            return seg_i, last_seg, emitted_any
+
         async def _worker():
             nonlocal tts_first_recorded, tts_wall_t0
             while True:
@@ -187,23 +260,54 @@ class StreamingPipeline:
                 t0 = time.perf_counter()
                 if tts_wall_t0 is None:
                     tts_wall_t0 = t0
-                try:
-                    wav = await self.tts.synthesize(sentence)
-                except Exception as e:
-                    logger.error("并发合成 TTS 失败（跳过该句）: %s", e)
-                    await frame_queue.put((seq, kind, None))
-                    continue
-                dur_ms = (time.perf_counter() - t0) * 1000
-                if not tts_first_recorded:
-                    self.timing["tts_first_ms"] = round(dur_ms)
-                    tts_first_recorded = True
-                await frame_queue.put((seq, kind, wav))
+                # 方向1：首个正文句尝试 claim 预连接（快路径已预建）
+                preconn = None
+                if kind == "sentence" and preconn_state is not None:
+                    preconn = await _claim_preconn()
+                # 方案2：优先流式合成（边收边发首帧）；无 stream_synthesize 时回退整句单帧
+                if hasattr(self.tts, "stream_synthesize"):
+                    # 首句优先用预连接；首段失败（emitted_any=False）回退用时建连重合成
+                    if preconn is not None:
+                        seg_i, last_seg, ok = await _drain_stream(preconn.stream_synthesize(sentence), seq, kind, t0)
+                        await preconn.close()  # 预连接单句用完即关
+                        if not ok:
+                            logger.warning("预连接首句失败，回退用时建连重合成")
+                            seg_i, last_seg, _ = await _drain_stream(self.tts.stream_synthesize(sentence), seq, kind, t0)
+                    else:
+                        seg_i, last_seg, _ = await _drain_stream(self.tts.stream_synthesize(sentence), seq, kind, t0)
+                    # 生成器结束：最后一段标记为句尾发出
+                    if last_seg is not None:
+                        await frame_queue.put(((seq, seg_i), kind, last_seg, True))
+                    else:
+                        await frame_queue.put(((seq, 0), kind, None, True))
+                else:
+                    # 回退：整句合成 → 单帧（句尾）
+                    try:
+                        wav = await self.tts.synthesize(sentence)
+                    except Exception as e:
+                        logger.error("并发合成 TTS 失败（跳过该句）: %s", e)
+                        await frame_queue.put(((seq, 0), kind, None, True))
+                        continue
+                    dur_ms = (time.perf_counter() - t0) * 1000
+                    if not tts_first_recorded:
+                        self.timing["tts_first_ms"] = round(dur_ms)
+                        tts_first_recorded = True
+                    await frame_queue.put(((seq, 0), kind, wav, True))
 
         async def _produce():
             nonlocal ttft_done, comfort_queued, total_sentences
             seq = 0
             it = iter(delta_iter)
             sentinel = object()
+
+            # ISSUE-0001 修复：慢路径（Hermes）路由判定后立即发安抚语，不等首 token。
+            # 慢路径由 tool_keywords 触发 → _pick_ack 命中 query 池（「稍等，我帮你查一下」）。
+            if route == HERMES:
+                ack_wav = self._pick_ack(text)
+                if ack_wav is not None:
+                    await frame_queue.put(((seq, 0), "comfort", ack_wav, True))
+                    seq += 1
+                    comfort_queued = True
 
             def _next_delta():
                 try:
@@ -236,44 +340,64 @@ class StreamingPipeline:
                 total_sentences[0] = seq  # 总句数（含安抚语），供主流程判断结束
                 for _ in range(N_WORKERS):
                     await tts_queue.put(None)
-                await frame_queue.put((None, None))  # 唤醒主流程检查结束
+                await frame_queue.put((None, None, None, None))  # 唤醒主流程检查结束
 
         workers = [asyncio.create_task(_worker()) for _ in range(N_WORKERS)]
         producer_task = asyncio.create_task(_produce())
 
-        # 主流程：序号重排 + 句间停顿（A6）
-        next_seq = 0
+        # 主流程：序号重排 + 句间停顿（A6，仅句边界加停顿，句内多帧连续）
+        next_sentence_seq = 0
+        next_seg = 0
         pending: dict = {}
         total_frames = 0
+        prev_is_end = True  # 首帧前不加停顿
         done = False
         while not done:
             item = await frame_queue.get()
             if item[0] is None:  # 结束哨兵（produce 已结束）→ 检查是否所有句已发出
-                if next_seq >= total_sentences[0]:
+                if next_sentence_seq >= total_sentences[0]:
                     done = True
                 continue
-            seq, kind, wav = item
-            pending[seq] = (kind, wav)
-            while next_seq in pending:
-                kind, wav = pending.pop(next_seq)
+            key, kind, wav, is_end = item
+            seq_i, seg_i = key
+            pending[key] = (kind, wav, is_end)
+            while (next_sentence_seq, next_seg) in pending:
+                kind, wav, is_end = pending.pop((next_sentence_seq, next_seg))
                 if wav is not None:
                     if kind == "comfort":
-                        comfort_sent = True
-                        self.timing["comfort_sent"] = True
+                        if next_seg == 0:
+                            comfort_sent = True
+                            self.timing["comfort_sent"] = True
                     else:
-                        sentence_count += 1
+                        if next_seg == 0:
+                            sentence_count += 1
                     chunk_count += 1
-                    if total_frames > 0 and self.sentence_gap_ms > 0:
+                    # 句间停顿：仅上一帧是句尾时（句内多帧不打断）
+                    if total_frames > 0 and self.sentence_gap_ms > 0 and prev_is_end:
                         await asyncio.sleep(self.sentence_gap_ms / 1000.0)
                     yield encode_frame(wav, self.max_frame_bytes)
                     total_frames += 1
-                next_seq += 1
-            if total_sentences[0] > 0 and next_seq >= total_sentences[0]:
+                    prev_is_end = is_end
+                if is_end:
+                    next_sentence_seq += 1
+                    next_seg = 0
+                else:
+                    next_seg += 1
+            if total_sentences[0] > 0 and next_sentence_seq >= total_sentences[0]:
                 done = True
 
         await producer_task
         for w in workers:
             await w
+        # 方向1：预连接未被消费则关闭（降级慢路径 / 预连接失败 / 无正文句场景，避免连接泄漏）
+        if preconn_state is not None:
+            pre = None
+            try:
+                pre = await preconn_state["task"]
+            except Exception:
+                pre = None
+            if pre is not None and not preconn_state["used"]:
+                await pre.close()
         if tts_wall_t0 is not None:
             tts_total_ms = (time.perf_counter() - tts_wall_t0) * 1000
 
