@@ -34,9 +34,6 @@ class Config:
         tts = self._data.get("tts", {})
         self.tts_primary = tts.get("primary", "edge")
         self.tts_edge_voice = tts.get("edge_voice", "zh-CN-XiaoxiaoNeural")
-        self.tts_fallback = tts.get("fallback", "piper")
-        self.tts_piper_model = BASE_DIR / tts.get("piper_model", "models/piper/zh_CN-huayan-medium.onnx")
-        self.tts_piper_config = BASE_DIR / tts.get("piper_config", "models/piper/zh_CN-huayan-medium.onnx.json")
         self.tts_edge_probe_timeout = float(tts.get("edge_probe_timeout", 3))
 
         vad = self._data.get("vad", {})
@@ -48,6 +45,7 @@ class Config:
         self.pipeline_sentence_max_chars = int(pipeline.get("sentence_max_chars", 50))
         self.pipeline_max_frame_bytes = int(pipeline.get("max_frame_bytes", 8 * 1024 * 1024))
         self.pipeline_comfort_text = pipeline.get("comfort_text", "好的，我查一下。")
+        self.pipeline_sentence_gap_ms = int(pipeline.get("sentence_gap_ms", 300))
 
         llm = self._data.get("llm", {})
         # 慢路径 = Hermes API Server（v0.3 起）

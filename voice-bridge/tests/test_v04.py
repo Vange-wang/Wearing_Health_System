@@ -129,3 +129,68 @@ def test_t2_voice_stream_endpoint():
 
 
 # T5/T6/T7 真机联调（需 BOX-3 硬件 + 局域网），留真机阶段执行
+
+
+# ---------- A6 · 小数点消歧（splitter 单测） ----------
+def test_a6_decimal_point_not_split():
+    from app.splitter import SentenceBuffer
+
+    def split(text):
+        sb = SentenceBuffer(max_chars=50)
+        return sb.feed(text) + sb.flush()
+
+    # 小数点不拆（数字.数字）
+    assert split("你的体温是37.5度，正常。") == ["你的体温是37.5度，正常。"]
+    assert split("3.14是圆周率。") == ["3.14是圆周率。"]
+    assert split("体温37.5度。血氧98%。") == ["体温37.5度。", "血氧98%。"]
+    # 英文句号拆（非小数点）
+    assert split("你好.明天见.") == ["你好.", "明天见."]
+
+
+# ---------- A6 · 句间 300ms 停顿（pipeline mock，多句时首句后 sleep） ----------
+def test_a6_sentence_gap():
+    import asyncio
+    import numpy as np
+    from app.splitter import SentenceBuffer
+
+    class FakeASR(ASRBase):
+        def transcribe(self, wav_path):
+            return "测试"
+
+    class FakeLLM(LLMBase):
+        name = "deepseek"
+
+        def __init__(self):
+            self.stats = {}
+
+        def chat(self, t):
+            return ""
+
+        def stream_chat(self, t):
+            return iter(["第一句。", "第二句。"])
+
+    class FakeTTS(TTSBase):
+        name = "edge"
+
+        async def synthesize(self, text):
+            return wrap_pcm_as_wav(b"\x00\x00" * 160, 16000)
+
+    p = StreamingPipeline(
+        asr=FakeASR(), llm=FakeLLM(), tts=FakeTTS(),
+        vad=VADGate(enabled=False),
+        sentence_gap_ms=50,  # 测试用短停顿，避免拖慢
+        lightweight_llm=FakeLLM(),
+        router=Router(tool_keywords=[], skill_keywords=[]),
+        rag=None,
+    )
+    samples = np.zeros(16000, dtype=np.float32)
+
+    async def run():
+        frames = []
+        async for f in p.run(samples, Path("dummy.wav")):
+            frames.append(f)
+        return frames
+
+    frames = asyncio.run(run())
+    assert len(frames) == 2  # 两句 → 两帧
+    assert p.timing["sentence_count"] == 2

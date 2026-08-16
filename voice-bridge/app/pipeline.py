@@ -4,6 +4,7 @@ Pipeline：VAD → ASR(批式) → LLM 流 → SentenceBuffer 分句 → 逐句 
 产出 `Iterator[bytes]`，每帧 = [4 字节大端长度] + [一句完整 WAV]。
 解码接缝（A2）：契约是"PCM 16k/16bit/mono 进入 VAD/ASR"，M1 在 VAD 前插 opus→PCM 即可。
 """
+import asyncio
 import json
 import logging
 import struct
@@ -57,6 +58,7 @@ class StreamingPipeline:
         max_frame_bytes: int = 8 * 1024 * 1024,
         sentence_max_chars: int = 50,
         comfort_text: str = "好的，我查一下。",
+        sentence_gap_ms: int = 300,
         lightweight_llm=None,
         router=None,
         rag=None,
@@ -71,6 +73,7 @@ class StreamingPipeline:
         self.max_frame_bytes = int(max_frame_bytes)
         self.sentence_max_chars = int(sentence_max_chars)
         self.comfort_text = comfort_text
+        self.sentence_gap_ms = int(sentence_gap_ms)  # A6 句间停顿
         self.router = router
         self.rag = rag
         self.rag_top_k = int(rag_top_k)
@@ -165,6 +168,9 @@ class StreamingPipeline:
 
         async def _emit_sentence(sentence: str):
             nonlocal tts_total_ms, sentence_count, chunk_count
+            if sentence_count > 0 and self.sentence_gap_ms > 0:
+                # A6：句间停顿（首句前不停，第二句起每句前停 300ms）
+                await asyncio.sleep(self.sentence_gap_ms / 1000.0)
             t_start = time.perf_counter()
             wav = await self.tts.synthesize(sentence)
             dur_ms = (time.perf_counter() - t_start) * 1000

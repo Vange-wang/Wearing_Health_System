@@ -8,9 +8,6 @@ asr:
 tts:
   primary: edge
   edge_voice: zh-CN-XiaoxiaoNeural
-  fallback: piper
-  piper_model: models/piper/zh_CN-huayan-medium.onnx
-  piper_config: models/piper/zh_CN-huayan-medium.onnx.json
   edge_probe_timeout: 3
 vad:
   enabled: true
@@ -36,5 +33,6 @@ pipeline:
   sentence_max_chars: 50
   max_frame_bytes: 8388608
   comfort_text: 好的，我查一下。
+  sentence_gap_ms: 300
 log:
   level: INFO

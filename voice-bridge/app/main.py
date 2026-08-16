@@ -104,6 +104,7 @@ async def startup():
             max_frame_bytes=cfg.pipeline_max_frame_bytes,
             sentence_max_chars=cfg.pipeline_sentence_max_chars,
             comfort_text=cfg.pipeline_comfort_text,
+            sentence_gap_ms=cfg.pipeline_sentence_gap_ms,
             lightweight_llm=lightweight_llm,
             router=router,
             rag=knowledge,
@@ -188,7 +189,7 @@ async def voice_chat(audio: UploadFile = File(...)):
         if not reply:
             return _err(502, "upstream_error", "LLM 返回空")
 
-        # 3. TTS（edge 失败自动切 piper）
+        # 3. TTS（edge 唯一，A5 弃 piper；失败 → 502）
         t = time.perf_counter()
         try:
             wav_bytes = await tts.synthesize(reply)
@@ -335,12 +336,20 @@ async def voice_stream(request: Request):
     stream = streaming_asr.create_stream()
     pcm_bytes = 0
     last_partial = ""
+    leftover = b""  # 奇数字节缓存（TCP/chunked 分包可能在奇数边界切分 int16）
 
     async def _feed(chunk: bytes):
-        nonlocal pcm_bytes, last_partial
-        pcm_bytes += len(chunk)
+        nonlocal pcm_bytes, last_partial, leftover
+        data = leftover + chunk
+        leftover = b""
+        if len(data) % 2 != 0:  # 奇数：缓存末字节，下个 chunk 拼接
+            leftover = data[-1:]
+            data = data[:-1]
+        if not data:
+            return
+        pcm_bytes += len(data)
         # 16bit int16 → float32
-        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         streaming_asr.accept(stream, samples)
         partial = streaming_asr.partial(stream)
         if partial and partial != last_partial:

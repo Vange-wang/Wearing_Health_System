@@ -50,8 +50,8 @@ venv\Scripts\python -m pip install -r requirements-dev.txt   # 跑测试才需�
 
 # 3. 放模型（不入库，gitignore）
 models/
-  sherpa-onnx-sense-voice-zh/      # ASR：SenseVoice（model.int8.onnx + tokens.txt）
-  piper/zh_CN-huayan-medium.onnx + .onnx.json   # TTS 兜底
+  sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/   # ASR：SenseVoice（批式）
+  sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/ # ASR：zipformer（流式，v0.4）
 
 # 4. Hermes API Server key + DeepSeek key（不入库）：复制到 .env
 #    HERMES_API_KEY=<与 Hermes 侧 API_SERVER_KEY 相同>
@@ -91,33 +91,7 @@ venv\Scripts\python -m pytest tests/ -v        # v0.2 回归 + v0.3 套件
 
 ## 说明
 
-- ASR：sherpa-onnx + SenseVoice（本地推理，批式）；VAD：能量门限（静音拦截 → 400 no_speech）
-- LLM：**Hermes API Server**（v0.3 A1 彻底替换 DeepSeek，无兜底路径）；与微信共用 persistent memory（每轮独立 session，跨轮记忆靠 persistent memory，A3）；SSE 工具指示事件已过滤不进分句器
-- TTS：edge-tts 主（晓晓）/ piper 离线兜底。**edge 现网 403 → piper 实际承载**；已知宕机时短路直走 piper；health 如实上报
-- Spec：`../规划文档/Spec文档/2026-08-15-语音桥-spec-v0.3.md`；自测报告：`../Code文档/v0.3自测报告.md`
-
-## 已知环境修复（迁移/重装必读）
-
-### piper espeak-ng-data（junction）【OI-005】
-
-piper-tts 1.6.0 Windows wheel 的 espeak-ng-data 查找用了编译机硬编码路径
-`D:\a\piper1-gpl\piper1-gpl\_skbuild\win-amd64-3.9\cmake-build\espeak_ng-install\share`。
-本机已用目录联接修复；**迁移机器/重建 venv 后需重建**（PowerShell）：
-
-```powershell
-$hard = "D:\a\piper1-gpl\piper1-gpl\_skbuild\win-amd64-3.9\cmake-build\espeak_ng-install\share"
-New-Item -ItemType Directory -Force -Path $hard | Out-Null
-New-Item -ItemType Junction -Path "$hard\espeak-ng-data" -Target "D:\<项目>\voice-bridge\venv\Lib\site-packages\piper\espeak-ng-data"
-```
-
-### edge-tts 输出格式（vendor patch）【OI-006】
-
-edge-tts 6.1.x 固定输出 24kHz mp3，Spec 要求返回 16kHz WAV。
-本机已 patch `venv\Lib\site-packages\edge_tts\communicate.py` 第 339 行
-`outputFormat` 为 `riff-16khz-16bit-mono-pcm`。**重装 edge-tts 会覆盖**，需重新 patch：
-
-```bash
-venv\Scripts\python -c "import pathlib; p=pathlib.Path('venv/Lib/site-packages/edge_tts/communicate.py'); t=p.read_text(encoding='utf-8'); t=t.replace('audio-24khz-48kbitrate-mono-mp3','riff-16khz-16bit-mono-pcm'); p.write_text(t, encoding='utf-8')"
-```
-
-> edge 恢复评估（OI-004，2026-08-15 已出结论）：edge-tts 7.2.8 实测 403 已修复但首音频 0.9~1.2s 劣于 piper 0.2s，**维持 piper 承载**；恢复为可选项，见 `../规划文档/技术验证/2026-08-15-edge-tts恢复评估-OI004.md`。
+- ASR：sherpa-onnx + SenseVoice（批式）+ **zipformer 流式**（v0.4 A2，真机 `/voice/stream` 用）；VAD：能量门限（静音拦截 → 400 no_speech）
+- LLM：**Hermes API Server**（慢路径）+ **DeepSeek 轻量通道**（纯闲聊/知识库，注入 USER.md）；三层路由（技能/工具→Hermes，知识库→RAG，其余→轻量）
+- TTS：**edge-tts 7.2.8 唯一**（v0.4 A5 弃 piper）：合成 24k mp3 → miniaudio 解码重采样 16k → WAV；edge 故障报 502（不兜底）；句间 300ms 停顿 + 小数点消歧（A6）
+- Spec：`../规划文档/Spec文档/2026-08-16-语音桥-spec-v0.4.md`；自测报告：`../Code文档/v0.4自测报告.md`

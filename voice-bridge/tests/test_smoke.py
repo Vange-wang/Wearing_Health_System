@@ -148,9 +148,9 @@ def test_t4_corrupt_wav_returns_400(client, monkeypatch):
     assert resp.json()["error"] == "bad_audio_format"
 
 
-# ---------- T5 · edge 故障注入 → 切 piper 不崩 + health 上报 ----------
-def test_t5_edge_failure_falls_back_to_piper():
-    from app.tts import TTSBase
+# ---------- T5 · edge 故障注入 → 抛 TTSError（A5 弃 piper，不兜底）+ health 上报 ----------
+def test_t5_edge_failure_raises_no_fallback():
+    from app.tts import TTSBase, TTSError
 
     class FailingEdge(TTSBase):
         name = "edge"
@@ -158,25 +158,15 @@ def test_t5_edge_failure_falls_back_to_piper():
         async def synthesize(self, text):
             raise RuntimeError("403 Forbidden (simulated)")
 
-    class FakePiper(TTSBase):
-        name = "piper"
-        called = False
-
-        async def synthesize(self, text):
-            self.called = True
-            return wrap_pcm_as_wav(b"\x00\x00" * 160, 16000)
-
     import asyncio
+    import pytest
 
-    fallback = FakePiper()
-    engine = TTSEngine(FailingEdge(), fallback)
-    result = asyncio.run(engine.synthesize("测试"))
-    assert fallback.called is True
-    assert result[:4] == b"RIFF"
+    engine = TTSEngine(FailingEdge())  # A5：无兜底，edge 唯一
+    with pytest.raises(RuntimeError):
+        asyncio.run(engine.synthesize("测试"))
     h = engine.health()
     assert h["configured_primary"] == "edge"
-    assert h["active_engine"] == "piper"
-    assert h["fallback_reason"] == "edge_403"
+    assert h["active_engine"] == "edge"  # 恒 edge，不切 piper
 
 
 # ---------- T6 · 分句器单测（标点/长句/flush/空句） ----------

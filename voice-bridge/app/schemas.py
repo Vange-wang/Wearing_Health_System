@@ -5,11 +5,11 @@ from pydantic import BaseModel
 
 
 class TTSHealth(BaseModel):
-    """health 的 tts 嵌套对象（v0.2，Spec §5.1）。"""
+    """health 的 tts 嵌套对象（v0.2，Spec §5.1；v0.4 A5：edge 唯一）。"""
 
     configured_primary: str          # 固定 "edge"
-    active_engine: str               # "edge" | "piper"
-    fallback_reason: Optional[str] = None  # fallback 生效时才有
+    active_engine: str               # 恒 "edge"（A5 弃 piper）
+    fallback_reason: Optional[str] = None  # 恒 None（无兜底）
 
 
 class HealthResponse(BaseModel):

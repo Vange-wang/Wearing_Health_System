@@ -1,9 +1,9 @@
-# voice-bridge 运行依赖（v0.2 继承 + v0.3/长期RAG：numpy + jieba）
+# voice-bridge 运行依赖（v0.2 继承 + v0.3/长期RAG：numpy + jieba + v0.4 A5：edge 7.2.8 + miniaudio）
 fastapi>=0.110
 uvicorn>=0.29
 sherpa-onnx>=1.10.30
-edge-tts>=6.1,<7.0  # 7.x 移除 output_format（固定24k mp3），6.1.x 支持直接输出 16kHz WAV
-piper-tts>=1.2.0
+edge-tts>=7.2,<8.0  # v0.4 A5：7.2.8 修复 403；输出 24k mp3，由 miniaudio 解码重采样到 16k
+miniaudio>=1.5     # v0.4 A5：内嵌解码器，mp3 → 16kHz/16bit/mono PCM（弃 piper）
 openai>=1.30
 python-multipart>=0.0.9
 PyYAML>=6.0
