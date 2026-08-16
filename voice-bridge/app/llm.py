@@ -26,17 +26,29 @@ logger = logging.getLogger("voice-bridge.llm")
 HISTORY_MAX_MESSAGES = 8   # 最近 4 轮（4 user + 4 assistant）
 SESSION_TTL_SECONDS = 600  # 10 分钟无交互则清空历史
 
+# 方案1（延迟优化）：DeepSeek 连接保温。A7 只在启动预热一次，长时间无请求后
+# TLS 连接被 DeepSeek 服务端回收，首请求付冷连接 ~1.4s（热连接仅 ~0.6s）。
+# 周期心跳（max_tokens=1 最小请求）保持连接热，llm_ttft 稳定 ~500ms。
+HEARTBEAT_INTERVAL_SECONDS = 240  # 每 4 分钟一次（< TLS 空闲超时，保守）
+
 # 慢路径哨兵：SSE 首次出现工具调用时，stream_chat 产出此对象一次，
 # 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
 TOOL_SENTINEL = object()
 
-# Spec §7 系统提示词（v0.2 微调版沿用：第 4 条"句号结尾"、第 5 条"不主动自我介绍"）
-SYSTEM_PROMPT = """你是"小衡"，一个便携健康助手的语音助手。要求：
-1. 回答口语化、自然、信息完整：简单问题一句话说清；需要解释的问题可展开到 2-3 句（约 100 字内），但别啰嗦。
-2. 用户是通过语音对话，回复要像日常聊天，不要列点、不要 markdown。
-3. 涉及健康数据的问题（心率/血氧/睡眠等）暂回答"健康数据监测功能即将上线"。
-4. 回答尽量用句号结尾，方便播报分句。
-5. 不要主动自我介绍（如"我是小衡/你的健康助手"），直接回答用户问题；除非用户明确问"你是谁/你叫什么名字"。"""
+# 人设 + 情感化系统提示词（Hermes 起草，参照小智默认人设；轻量通道与慢路径共用基调）
+SYSTEM_PROMPT = """你是小V，一个聪明友善、活泼亲切的健康助手，陪伴用户的可穿戴健康设备。
+
+说话风格：
+- 像真人朋友聊天，自然口语化，带点情绪和幽默，不要书面腔、机器人腔、客套话。
+- 适当用语气词（嗯、哈哈、哦、呀、嘞）和情感标点（！？～…）。
+- 提到健康、身体、心情时带一点体贴（例如「要注意休息哦～」「最近睡得好吗？」）。
+- 回答简短，1~2 句为主，适合语音朗读，句号或问号结尾。
+
+功能约束：
+- 健康数据（心率、血氧、睡眠等）实时监测功能尚未接入，被问到时诚实说「这个功能还在准备中，接入后就能帮你看了」，不要编造数据。
+- 实时数据（天气、快递、新闻、股票、路况等）你无法联网查询时，诚实说「这个我暂时查不了，需要联网搜索」，禁止编造具体数值。
+- 不主动编造任何具体数据或事实。
+- 不主动自我介绍，直接回答用户问题；除非用户明确问「你是谁/你叫什么名字」。"""
 
 
 class LLMError(Exception):
@@ -76,6 +88,8 @@ class HermesLLM(LLMBase):
         except ImportError as e:
             raise LLMConfigError(f"openai/httpx 未安装: {e}") from e
         # trust_env=False：不信任 HTTPS_PROXY 等环境变量，本机直连（Spec §3）
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -103,58 +117,96 @@ class HermesLLM(LLMBase):
         return text
 
     def stream_chat(self, user_text: str):
-        """流式：产出正文增量；工具指示（tool_calls）只标记、不透出。
+        """流式：产出正文增量；工具调用只标记、不透出。
+
+        Hermes API Server 的 `/v1/chat/completions` 是**真 agent（跑工具循环）**，
+        但响应体 `tool_calls` 字段天然为空——工具调用通过 SSE 的
+        `event: hermes.tool.progress` 事件暴露（见查证结论：纯聊天透传是误判）。
+        故此处用 httpx 直读 SSE，监听该事件判 tool_seen。
 
         self.stats 在流结束后可读：
         - first_chunk_ms：首个 SSE chunk 到达（相对流开始）
         - first_content_ms：首个正文 delta 到达（无正文=工具期长度近似）
-        - tool_seen：是否出现工具调用
+        - tool_seen：是否出现工具调用（hermes.tool.progress 事件或 tool_calls delta）
         """
+        import json
+
+        import httpx
+
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
         t0 = time.perf_counter()
+        url = f"{self._base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            "stream": True,
+        }
+        stream_client = httpx.Client(trust_env=False, timeout=180.0)
         try:
-            stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_text},
-                ],
-                stream=True,  # v0.2/v0.3 流式
-            )
+            req = stream_client.build_request("POST", url, json=body, headers=headers)
+            resp = stream_client.send(req, stream=True)
         except Exception as e:
+            stream_client.close()
             raise LLMError(f"Hermes 流式调用失败: {e}") from e
 
         stats = self.stats
 
         def _iter():
+            sentinel_sent = False
             try:
-                sentinel_sent = False
-                for chunk in stream:
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    # 非标准事件：hermes.tool.progress → 工具调用（真 agent 工具循环）
+                    if line.startswith("event:"):
+                        ev = line[6:].strip()
+                        if ev == "hermes.tool.progress":
+                            stats["tool_seen"] = True
+                            if not sentinel_sent:
+                                sentinel_sent = True
+                                yield TOOL_SENTINEL
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    d = line[5:].strip()
+                    if not d or d == "[DONE]":
+                        continue
                     if stats["first_chunk_ms"] is None:
                         stats["first_chunk_ms"] = round((time.perf_counter() - t0) * 1000)
-                    if not chunk.choices:
+                    try:
+                        obj = json.loads(d)
+                    except Exception:
                         continue
-                    delta = chunk.choices[0].delta
-                    if delta is None:
+                    if "choices" not in obj:
                         continue
-                    # 工具指示事件：标记 + 过滤，不进分句器（Spec §9 风险表）；
-                    # 首次出现时产出一次 TOOL_SENTINEL，供 pipeline 发安抚语（A5）
-                    if getattr(delta, "tool_calls", None):
+                    delta = obj["choices"][0].get("delta") or {}
+                    # 标准 tool_calls delta（若 Hermes 某些场景透出）
+                    if delta.get("tool_calls"):
                         stats["tool_seen"] = True
                         if not sentinel_sent:
                             sentinel_sent = True
                             yield TOOL_SENTINEL
                         continue
-                    if getattr(delta, "role", None) == "tool":
-                        stats["tool_seen"] = True
-                        continue
-                    content = getattr(delta, "content", None)
+                    content = delta.get("content")
                     if content:
                         if stats["first_content_ms"] is None:
                             stats["first_content_ms"] = round((time.perf_counter() - t0) * 1000)
                         yield content
             except Exception as e:
                 raise LLMError(f"Hermes 流式读取失败: {e}") from e
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                try:
+                    stream_client.close()
+                except Exception:
+                    pass
 
         return _iter()
 
@@ -206,6 +258,9 @@ class LightweightLLM(LLMBase):
         self._history: deque = deque(maxlen=HISTORY_MAX_MESSAGES)
         self._history_lock = threading.Lock()
         self._last_active = time.time()
+        # 方案1：心跳保温线程（保持 DeepSeek TLS 连接热）
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
         logger.info("Lightweight(DeepSeek) ready: %s @ %s", model, base_url)
 
     def _system_prompt(self) -> str:
@@ -320,6 +375,43 @@ class LightweightLLM(LLMBase):
             logger.info("DeepSeek 预热完成（连接 + 首 token 就绪）")
         except Exception as e:
             logger.warning("DeepSeek 预热失败（首次请求付冷启动，不影响服务）: %s", e)
+
+    def start_heartbeat(self, interval: float = HEARTBEAT_INTERVAL_SECONDS) -> None:
+        """方案1：启动周期心跳（后台守护线程），保持 DeepSeek TLS 连接热。
+
+        消除「长时间无请求 → 连接被服务端回收 → 首请求付冷连接 ~1.4s」的尖峰。
+        """
+        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+            return
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(interval,),
+            daemon=True,
+            name="deepseek-heartbeat",
+        )
+        self._heartbeat_thread.start()
+        logger.info("DeepSeek 心跳保温启动（每 %ds 一次）", interval)
+
+    def stop_heartbeat(self) -> None:
+        """停止心跳（服务关闭时调用）。"""
+        self._heartbeat_stop.set()
+
+    def _heartbeat_loop(self, interval: float) -> None:
+        while not self._heartbeat_stop.is_set():
+            self._heartbeat_stop.wait(interval)
+            if self._heartbeat_stop.is_set():
+                break
+            try:
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": "你好"}],
+                    max_tokens=1,
+                    stream=False,
+                )
+                logger.debug("DeepSeek 心跳保温 OK")
+            except Exception as e:
+                logger.debug("DeepSeek 心跳失败（下次重试）: %s", e)
 
 
 def create_llm(cfg) -> LLMBase:
