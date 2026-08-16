@@ -58,15 +58,25 @@ class EdgeTTS(TTSBase):
 
     def __init__(self, voice: str = "zh-CN-XiaoxiaoNeural"):
         self.voice = voice
+        self._connector = None  # aiohttp 连接池：复用 TLS/TCP，省每句握手（句间间隔关键优化）
+
+    def _get_connector(self):
+        """惰性创建 aiohttp TCP 连接池（keep-alive，跨句复用 TLS/TCP 连接）。"""
+        import aiohttp
+
+        if self._connector is None or getattr(self._connector, "closed", False):
+            self._connector = aiohttp.TCPConnector(limit=1, keepalive_timeout=30, ttl_dns_cache=300)
+        return self._connector
 
     async def synthesize(self, text: str) -> bytes:
         import edge_tts
 
+        connector = self._get_connector()
         last_err: Exception | None = None
         for attempt in range(2):  # 首次 + 1 次重试（缓解网络抖动/瞬时超时）
             try:
                 chunks: list[bytes] = []
-                communicate = edge_tts.Communicate(text=text, voice=self.voice)
+                communicate = edge_tts.Communicate(text=text, voice=self.voice, connector=connector)
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         chunks.append(chunk["data"])
