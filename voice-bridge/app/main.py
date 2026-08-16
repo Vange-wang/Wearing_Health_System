@@ -25,7 +25,7 @@ from .asr import ASRModelLoadError, create_asr, create_streaming_asr, read_wav_1
 from .config import load_config
 from .knowledge import KnowledgeBase
 from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
-from .pipeline import FrameTooLargeError, NoSpeechError, StreamingPipeline
+from .pipeline import FrameTooLargeError, NoSpeechError, StreamingPipeline, encode_frame
 from .router import Router
 from .schemas import HealthResponse, TTSHealth
 from .tts import TTSError, create_tts, probe_edge
@@ -373,7 +373,18 @@ async def voice_stream(request: Request):
     final_decode_ms = _ms(t_final)
     logger.info("ASR final (%d chars, %d PCM bytes): %s", len(text), pcm_bytes, text[:80])
     if not text:
-        return _err(400, "no_speech", "流式 ASR 未识别出有效语音")
+        # 短语音/没听清：返回提示语音（单帧），而非 400 无反应
+        try:
+            wav = await tts.synthesize("没听清，请再说一次。")
+            frame = encode_frame(wav, cfg.pipeline_max_frame_bytes)
+        except Exception as e:
+            logger.warning("短语音兜底 TTS 失败: %s", e)
+            return _err(400, "no_speech", "流式 ASR 未识别出有效语音")
+        return Response(
+            content=frame,
+            media_type="application/octet-stream",
+            headers={"X-Audio-Framing": "wav-length-prefixed"},
+        )
 
     gen = pipeline.run_text(text)
     try:
