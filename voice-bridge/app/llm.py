@@ -12,11 +12,19 @@
 - 直连：trust_env=False，不信任环境代理（与 v0.1/v0.2 一致）。
 """
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from pathlib import Path
 
 logger = logging.getLogger("voice-bridge.llm")
+
+# ISSUE-0008：轻量通道多轮上下文（指代消解）。
+# 轻量通道每轮独立 messages 导致「A城市天气 → B城市呢」无法理解指代，
+# 此处维护一个滑动窗口会话历史（最近 N 轮），并设置无交互过期避免久远串上下文。
+HISTORY_MAX_MESSAGES = 8   # 最近 4 轮（4 user + 4 assistant）
+SESSION_TTL_SECONDS = 600  # 10 分钟无交互则清空历史
 
 # 慢路径哨兵：SSE 首次出现工具调用时，stream_chat 产出此对象一次，
 # 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
@@ -193,6 +201,11 @@ class LightweightLLM(LLMBase):
         self.model = model
         self.user_profile_path = user_profile_path
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        # ISSUE-0008：滑动窗口会话历史（多轮指代消解）。
+        # 单会话（当前单 BOX-3 设备）；多设备时需按来源区分会话。
+        self._history: deque = deque(maxlen=HISTORY_MAX_MESSAGES)
+        self._history_lock = threading.Lock()
+        self._last_active = time.time()
         logger.info("Lightweight(DeepSeek) ready: %s @ %s", model, base_url)
 
     def _system_prompt(self) -> str:
@@ -205,36 +218,61 @@ class LightweightLLM(LLMBase):
             + profile
         )
 
+    def _get_messages(self, user_text: str) -> list[dict]:
+        """构造带历史的 messages（ISSUE-0008）：system + 最近 N 轮历史 + 当前 user。
+
+        超过 SESSION_TTL_SECONDS 无交互则清空历史，避免久远对话串上下文。
+        """
+        system = self._system_prompt()
+        now = time.time()
+        with self._history_lock:
+            if now - self._last_active > SESSION_TTL_SECONDS:
+                self._history.clear()
+            history = list(self._history)
+            self._last_active = now
+        return [{"role": "system", "content": system}] + history + [{"role": "user", "content": user_text}]
+
+    def _remember(self, user_text: str, assistant_text: str) -> None:
+        """把一轮对话（user + assistant）追加进历史（ISSUE-0008）。"""
+        assistant_text = (assistant_text or "").strip()
+        if not assistant_text:
+            return
+        with self._history_lock:
+            self._history.append({"role": "user", "content": user_text})
+            self._history.append({"role": "assistant", "content": assistant_text})
+            self._last_active = time.time()
+
+    def clear_history(self) -> None:
+        """清空会话历史（测试/手动重置用）。"""
+        with self._history_lock:
+            self._history.clear()
+
     def chat(self, user_text: str) -> str:
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": self._system_prompt()},
-                    {"role": "user", "content": user_text},
-                ],
+                messages=self._get_messages(user_text),
                 stream=False,
             )
         except LLMError:
             raise
         except Exception as e:
             raise LLMError(f"DeepSeek 调用失败: {e}") from e
-        return (resp.choices[0].message.content or "").strip()
+        text = (resp.choices[0].message.content or "").strip()
+        self._remember(user_text, text)
+        return text
 
     def stream_chat(self, user_text: str):
         t0 = time.perf_counter()
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
         try:
-            system = self._system_prompt()
+            messages = self._get_messages(user_text)
         except LLMError:
             raise
         try:
             stream = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_text},
-                ],
+                messages=messages,
                 stream=True,
             )
         except Exception as e:
@@ -243,6 +281,7 @@ class LightweightLLM(LLMBase):
         stats = self.stats
 
         def _iter():
+            collected: list[str] = []
             try:
                 for chunk in stream:
                     if stats["first_chunk_ms"] is None:
@@ -256,9 +295,12 @@ class LightweightLLM(LLMBase):
                     if content:
                         if stats["first_content_ms"] is None:
                             stats["first_content_ms"] = round((time.perf_counter() - t0) * 1000)
+                        collected.append(content)
                         yield content
             except Exception as e:
                 raise LLMError(f"DeepSeek 流式读取失败: {e}") from e
+            # 流正常结束：把这一轮记入历史（ISSUE-0008）
+            self._remember(user_text, "".join(collected))
 
         return _iter()
 
