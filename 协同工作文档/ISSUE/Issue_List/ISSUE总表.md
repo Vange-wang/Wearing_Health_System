@@ -16,6 +16,8 @@
 | `ISSUE-0004` | 唤醒词（预制词 → 自定义训练） | future feature | open | P3 | WorkBuddy | 预制词唤醒实现 + 自定义唤醒词训练走通 |
 | `ISSUE-0005` | 电池供电（USB → 锂电） | future hardware | open | P3 | 待定 | 锂电供电实现 + 续航验证 |
 | `ISSUE-0006` | opus 广域网压缩优化 | future optimization | open | P3 | WorkBuddy / Hermes | 解决服务端 opus 解码依赖 + 验证广域网压缩收益 |
+| `ISSUE-0007` | 流式 ASR 个别字词识别不够清晰 | quality / accuracy | open | P2 | WorkBuddy / Hermes | 多轮真机采样建准确率基线；不达标则换优流式模型或加数字/术语纠错 |
+| `ISSUE-0008` | 多轮对话上下文无法联立（指代消解缺失） | feature / 上下文记忆 | open | P2 | WorkBuddy / Hermes | 轻量通道接入短期会话历史 + 指代消解端到端验证 |
 
 ## Closed Issue
 
