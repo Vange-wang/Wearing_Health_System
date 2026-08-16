@@ -152,7 +152,13 @@ class StreamingASR:
         return self.recognizer.get_result(stream).strip()
 
     def final(self, stream) -> str:
-        """流结束（按键松开）：标记 input_finished，排空解码，返回最终文本。"""
+        """流结束（按键松开）：补尾静音 flush → input_finished → 排空解码 → 最终文本。
+
+        流式 transducer（zipformer）需要尾部静音才能 flush 出最后几个字，
+        否则「头晕」会被截成「头」（最后一个字说完立刻松开时必然复现）。
+        补 500ms 静音实测可完整识别尾部字词。
+        """
+        self.accept(stream, np.zeros(int(self.sample_rate * 0.5), dtype=np.float32))
         stream.input_finished()
         while self.recognizer.is_ready(stream):
             self.recognizer.decode_stream(stream)
