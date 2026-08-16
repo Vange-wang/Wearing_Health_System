@@ -37,8 +37,36 @@ class TTSBase(ABC):
         """文本 → WAV bytes（16kHz/16bit/mono）。"""
 
 
+def _trim_silence(wav: bytes, keep_ms: int = 50) -> bytes:
+    """裁剪 WAV 前后静音（edge 音频自带 ~0.19s 前导 + ~0.57s 尾静音，是句间间隔的主因）。
+
+    前后各保留 keep_ms 毫秒缓冲，避免把语音起音/收音截得太生硬。
+    """
+    import numpy as np
+
+    with wave.open(io.BytesIO(wav)) as w:
+        sr = w.getframerate()
+        data = w.readframes(w.getnframes())
+    samples = np.frombuffer(data, dtype=np.int16)
+    if samples.size == 0:
+        return wav
+    peak = int(np.max(np.abs(samples)))
+    if peak == 0:
+        return wav  # 全静音，保留原样
+    threshold = max(200, int(peak * 0.02))
+    idx = np.nonzero(np.abs(samples) > threshold)[0]
+    if idx.size == 0:
+        return wav
+    keep = int(sr * keep_ms / 1000)
+    start = max(0, int(idx[0]) - keep)
+    end = min(samples.size, int(idx[-1]) + 1 + keep)
+    if start >= end:
+        return wav
+    return wrap_pcm_as_wav(samples[start:end].astype(np.int16).tobytes(), sr)
+
+
 def _mp3_to_wav16k(mp3: bytes) -> bytes:
-    """edge-tts 24kHz mp3 → miniaudio 解码重采样 → 16kHz/16bit/mono WAV。"""
+    """edge-tts 24kHz mp3 → miniaudio 解码重采样 → 16kHz/16bit/mono WAV（裁静音）。"""
     import miniaudio
 
     dec = miniaudio.decode(
@@ -50,7 +78,7 @@ def _mp3_to_wav16k(mp3: bytes) -> bytes:
     pcm = dec.samples.tobytes() if hasattr(dec.samples, "tobytes") else bytes(dec.samples)
     if not pcm:
         raise TTSError("miniaudio 解码结果为空")
-    return wrap_pcm_as_wav(pcm, 16000)
+    return _trim_silence(wrap_pcm_as_wav(pcm, 16000))
 
 
 class EdgeTTS(TTSBase):

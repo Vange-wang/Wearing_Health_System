@@ -168,8 +168,8 @@ class StreamingPipeline:
 
         # 预合成流水线（并发 worker + 序号重排）：
         # produce(LLM 分句) → tts_queue → N worker 并发 TTS → frame_queue → 按序发帧
-        # 并发合成：edge 每句独立连接可并发，3 句 4.2s→1.0s（实测）；序号重排保证句子顺序
-        N_WORKERS = 3
+        # 并发合成：edge 每句独立连接可并发（8 句 2.2s 实测稳定）；序号重排保证句子顺序
+        N_WORKERS = 8
         tts_queue: asyncio.Queue = asyncio.Queue()
         frame_queue: asyncio.Queue = asyncio.Queue()
         tts_first_recorded = False
