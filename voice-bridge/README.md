@@ -58,6 +58,16 @@ models/
 #    DEEPSEEK_API_KEY=<轻量通道用，DeepSeek 直连>
 ```
 
+## 部署检查（上线前必查）
+
+- **环境不得有代理变量**（AGENTS.md 红线）：`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 必须为空。
+  - 原因：edge-tts 库内部 `trust_env=True`，若服务进程环境存在代理变量，edge 合成流量会走代理，延迟特征改变甚至失败。
+  - 检查（Windows PowerShell）：
+    ```powershell
+    $env:HTTP_PROXY; $env:HTTPS_PROXY; $env:ALL_PROXY   # 三者均应为空（无输出）
+    ```
+  - voice-bridge 自身对 DeepSeek/edge 直连已用 `trust_env=False`，但 edge-tts 库内部不受控，故须从环境层面杜绝代理变量。
+
 ## 启动
 
 ```bash
