@@ -166,43 +166,42 @@ class StreamingPipeline:
             else:
                 raise
 
-        # 预合成流水线：produce(LLM 分句) → tts_queue → worker(TTS) → frame_queue → 主流程发帧
-        # 收益：TTS 合成与 LLM 生成并行，句间仅剩 A6 停顿（300ms），不再累加 edge 合成 ~1.3s
+        # 预合成流水线（并发 worker + 序号重排）：
+        # produce(LLM 分句) → tts_queue → N worker 并发 TTS → frame_queue → 按序发帧
+        # 并发合成：edge 每句独立连接可并发，3 句 4.2s→1.0s（实测）；序号重排保证句子顺序
+        N_WORKERS = 3
         tts_queue: asyncio.Queue = asyncio.Queue()
         frame_queue: asyncio.Queue = asyncio.Queue()
         tts_first_recorded = False
         comfort_queued = False
+        tts_wall_t0 = None
+        total_sentences = [0]
 
         async def _worker():
-            nonlocal tts_total_ms, sentence_count, chunk_count, comfort_sent, tts_first_recorded
+            nonlocal tts_first_recorded, tts_wall_t0
             while True:
                 item = await tts_queue.get()
                 if item is None:
-                    await frame_queue.put(None)
                     break
-                kind, sentence = item
-                t_start = time.perf_counter()
+                seq, kind, sentence = item
+                t0 = time.perf_counter()
+                if tts_wall_t0 is None:
+                    tts_wall_t0 = t0
                 try:
                     wav = await self.tts.synthesize(sentence)
                 except Exception as e:
-                    logger.error("预合成 TTS 失败（跳过该句）: %s", e)
+                    logger.error("并发合成 TTS 失败（跳过该句）: %s", e)
+                    await frame_queue.put((seq, kind, None))
                     continue
-                dur_ms = (time.perf_counter() - t_start) * 1000
+                dur_ms = (time.perf_counter() - t0) * 1000
                 if not tts_first_recorded:
                     self.timing["tts_first_ms"] = round(dur_ms)
                     tts_first_recorded = True
-                tts_total_ms += dur_ms
-                if kind == "comfort":
-                    comfort_sent = True
-                    self.timing["comfort_sent"] = True
-                else:
-                    sentence_count += 1
-                chunk_count += 1
-                await frame_queue.put(encode_frame(wav, self.max_frame_bytes))
+                await frame_queue.put((seq, kind, wav))
 
         async def _produce():
-            nonlocal ttft_done, comfort_queued
-            # LLM 同步流式迭代放到线程池，避免阻塞事件循环（否则 worker 无法并行 TTS）
+            nonlocal ttft_done, comfort_queued, total_sentences
+            seq = 0
             it = iter(delta_iter)
             sentinel = object()
 
@@ -220,35 +219,63 @@ class StreamingPipeline:
                     # 慢路径哨兵（工具调用）→ 安抚语优先合成（A5）
                     if delta is TOOL_SENTINEL:
                         if not comfort_queued:
-                            await tts_queue.put(("comfort", self.comfort_text))
+                            await tts_queue.put((seq, "comfort", self.comfort_text))
+                            seq += 1
                             comfort_queued = True
                         continue
                     if not ttft_done:
                         self.timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
                         ttft_done = True
                     for sentence in splitter.feed(delta):
-                        await tts_queue.put(("sentence", sentence))
+                        await tts_queue.put((seq, "sentence", sentence))
+                        seq += 1
                 for sentence in splitter.flush():
-                    await tts_queue.put(("sentence", sentence))
+                    await tts_queue.put((seq, "sentence", sentence))
+                    seq += 1
             finally:
-                await tts_queue.put(None)
+                total_sentences[0] = seq  # 总句数（含安抚语），供主流程判断结束
+                for _ in range(N_WORKERS):
+                    await tts_queue.put(None)
+                await frame_queue.put((None, None))  # 唤醒主流程检查结束
 
-        worker_task = asyncio.create_task(_worker())
+        workers = [asyncio.create_task(_worker()) for _ in range(N_WORKERS)]
         producer_task = asyncio.create_task(_produce())
 
-        # 主流程：按序发帧，句间停顿（A6）
-        sent_idx = 0
-        while True:
-            frame = await frame_queue.get()
-            if frame is None:
-                break
-            if sent_idx > 0 and self.sentence_gap_ms > 0:
-                await asyncio.sleep(self.sentence_gap_ms / 1000.0)
-            yield frame
-            sent_idx += 1
+        # 主流程：序号重排 + 句间停顿（A6）
+        next_seq = 0
+        pending: dict = {}
+        total_frames = 0
+        done = False
+        while not done:
+            item = await frame_queue.get()
+            if item[0] is None:  # 结束哨兵（produce 已结束）→ 检查是否所有句已发出
+                if next_seq >= total_sentences[0]:
+                    done = True
+                continue
+            seq, kind, wav = item
+            pending[seq] = (kind, wav)
+            while next_seq in pending:
+                kind, wav = pending.pop(next_seq)
+                if wav is not None:
+                    if kind == "comfort":
+                        comfort_sent = True
+                        self.timing["comfort_sent"] = True
+                    else:
+                        sentence_count += 1
+                    chunk_count += 1
+                    if total_frames > 0 and self.sentence_gap_ms > 0:
+                        await asyncio.sleep(self.sentence_gap_ms / 1000.0)
+                    yield encode_frame(wav, self.max_frame_bytes)
+                    total_frames += 1
+                next_seq += 1
+            if total_sentences[0] > 0 and next_seq >= total_sentences[0]:
+                done = True
 
         await producer_task
-        await worker_task
+        for w in workers:
+            await w
+        if tts_wall_t0 is not None:
+            tts_total_ms = (time.perf_counter() - tts_wall_t0) * 1000
 
         self.timing["llm_total_ms"] = round((time.perf_counter() - llm_t0) * 1000)
         self.timing["tts_total_ms"] = round(tts_total_ms)
