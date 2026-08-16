@@ -9,7 +9,13 @@ import re
 logger = logging.getLogger("voice-bridge.splitter")
 
 # 中日英共用句子终结标点（Spec §6.2：。！？〜；\n）
-_SENTENCE_PUNCT = set("。！？!?〜；;\n")
+# 含 ～(U+FF5E 全角波浪号)：LLM 实际输出此码位，与 〜(U+301C) 不同，两者都收（Hermes 查证 #2）
+# 含 …(U+2026 省略号)：实测「揪心了…要不要」出现在语义停顿处（Hermes 查证 #2 评估决定加）
+# 不含 —(U+2014 破折号)：实测「比如——」是引出下文非边界，加会误拆
+_SENTENCE_PUNCT = set("。！？!?〜～…；;\n")
+
+# 兜底拆分的可接受软边界（max_chars 超长时优先在这些字符处断，避免词中腰斩）
+_SOFT_BOUNDARY = set("，,、 \t")
 
 # 英文句点（A6：可作句号，但需与小数点消歧）
 _ENGLISH_PERIOD = "."
@@ -49,12 +55,33 @@ class SentenceBuffer:
             elif ch == _ENGLISH_PERIOD:
                 self._pending_dot = True  # 延迟到下一个字符判定
             elif len(self._buf) >= self.max_chars:
-                out.extend(self._flush())
+                out.extend(self._split_at_boundary())  # 兜底：对齐软边界，防词中腰斩
         return out
 
     def flush(self) -> list[str]:
         """流结束，输出剩余内容（即使无标点）。"""
         self._pending_dot = False
+        return self._flush()
+
+    def _split_at_boundary(self) -> list[str]:
+        """max_chars 兜底拆分：优先在最近的可接受软边界（逗号/顿号/空格）处断。
+
+        边界字符归前一句（保留逗号的收尾自然停顿）；找不到任何软边界才硬切（整句 flush）+ 日志。
+        防「那|些」类词中腰斩（Hermes 查证 #3）。
+        """
+        buf = "".join(self._buf)
+        for i in range(len(buf) - 1, 0, -1):  # 从后往前找最近的软边界（跳过 i=0，避免空头）
+            if buf[i] in _SOFT_BOUNDARY:
+                head = buf[: i + 1]
+                tail = buf[i + 1 :]
+                self._buf = list(tail)
+                s = head.strip()
+                if s and _SPEAKABLE.search(s):
+                    logger.debug("sentence (%d chars, soft-boundary split): %s", len(s), s[:40])
+                    return [s]
+                return []
+        # 无软边界 → 硬切（整句 flush）+ 日志
+        logger.warning("分句兜底硬切（%d chars 无软边界）: %s", len(buf), buf[:40])
         return self._flush()
 
     def _flush(self) -> list[str]:
