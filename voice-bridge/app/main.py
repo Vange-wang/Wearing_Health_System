@@ -407,8 +407,12 @@ async def voice_stream(request: Request):
 
     async def body():
         yield first_frame
-        async for frame in gen:
-            yield frame
+        try:
+            async for frame in gen:
+                yield frame
+        except Exception as e:
+            # 后续句 TTS/LLM 失败：已产出的帧照常播放，响应流优雅收尾（不中断连接）
+            logger.error("后续帧生成失败（已播帧不受影响）: %s", e)
         logger.info(json.dumps({
             "event": "request_done",
             "open_ms": open_ms,

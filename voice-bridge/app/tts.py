@@ -62,19 +62,29 @@ class EdgeTTS(TTSBase):
     async def synthesize(self, text: str) -> bytes:
         import edge_tts
 
-        try:
-            chunks: list[bytes] = []
-            communicate = edge_tts.Communicate(text=text, voice=self.voice)
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    chunks.append(chunk["data"])
-        except Exception as e:
-            # edge 故障（403/超时/断网）统一包装为 TTSError → 上层 502（Spec §6.8）
-            raise TTSError(f"edge-tts 合成失败: {e}") from e
-        mp3 = b"".join(chunks)
-        if not mp3:
-            raise TTSError("edge-tts 返回空音频")
-        return _mp3_to_wav16k(mp3)
+        last_err: Exception | None = None
+        for attempt in range(2):  # 首次 + 1 次重试（缓解网络抖动/瞬时超时）
+            try:
+                chunks: list[bytes] = []
+                communicate = edge_tts.Communicate(text=text, voice=self.voice)
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        chunks.append(chunk["data"])
+            except Exception as e:
+                # edge 故障（超时/断网）统一包装为 TTSError → 上层 502（Spec §6.8）
+                last_err = TTSError(f"edge-tts 合成失败: {e}")
+                logger.warning("edge 合成失败（第 %d 次），%s", attempt + 1, last_err)
+                if attempt == 0:
+                    await asyncio.sleep(0.3)
+                continue
+            mp3 = b"".join(chunks)
+            if not mp3:
+                last_err = TTSError("edge-tts 返回空音频")
+                if attempt == 0:
+                    await asyncio.sleep(0.3)
+                continue
+            return _mp3_to_wav16k(mp3)
+        raise last_err or TTSError("edge-tts 合成失败")
 
 
 class TTSEngine:
