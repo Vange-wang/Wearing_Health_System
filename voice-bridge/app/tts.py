@@ -8,6 +8,7 @@ v0.4 A5 裁决：TTS 换 edge-tts 7.2.8（修复 403），弃 piper 兜底（edg
 import asyncio
 import io
 import logging
+import socket
 import ssl
 import wave
 from abc import ABC, abstractmethod
@@ -35,6 +36,15 @@ logger = logging.getLogger("voice-bridge.tts")
 
 # 与 edge_tts.communicate._SSL_CTX 一致（certifi 证书，避免系统证书缺失导致握手失败）
 _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+
+
+def _ipv4_connector() -> aiohttp.TCPConnector:
+    """强制 IPv4 的连接器。
+
+    edge-tts 用 aiohttp 默认 IPv6 优先（family=0），但 iPhone 热点等环境 IPv6 不通，
+    导致连 speech.platform.bing.com 失败（「指定的网络名不再可用」）。强制 AF_INET 解决。
+    """
+    return aiohttp.TCPConnector(family=socket.AF_INET)
 
 
 class TTSError(Exception):
@@ -238,7 +248,7 @@ class EdgeTTS(TTSBase):
                 chunks: list[bytes] = []
                 # 每次新建连接（不复用 connector：edge 服务端会关闲置连接，复用导致 Session is closed）
                 # 注意：edge-tts 7.2.8 已移除自定义 SSML 支持（escape 掉 <>&），express-as 不可用
-                communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch)
+                communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch, connector=_ipv4_connector())
                 async for chunk in communicate.stream():
                     if chunk["type"] == "audio":
                         chunks.append(chunk["data"])
@@ -280,7 +290,7 @@ class EdgeTTS(TTSBase):
         emitted = 0  # 已产出的 sample 数（增量游标，靠解码前缀一致性保证无重复/无缺口）
         first_sent = False
         try:
-            communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch)
+            communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch, connector=_ipv4_connector())
             async for chunk in communicate.stream():
                 if chunk["type"] != "audio":
                     continue
@@ -328,7 +338,7 @@ class EdgeTTS(TTSBase):
         - trust_env=False：不读环境代理变量（AGENTS.md「任何环境不得配置代理」红线）。
         - 失败返回 None，上层无缝回退「用时建连」路径，无正确性风险。
         """
-        session = aiohttp.ClientSession(trust_env=False)
+        session = aiohttp.ClientSession(trust_env=False, connector=_ipv4_connector())
         try:
             ws = await asyncio.wait_for(
                 session.ws_connect(
