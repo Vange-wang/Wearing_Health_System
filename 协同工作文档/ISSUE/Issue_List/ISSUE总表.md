@@ -1,6 +1,6 @@
 # ISSUE 总表
 
-更新日期：2026-08-16
+更新日期：2026-08-17
 
 维护：Hermes（审查方）登记，WorkBuddy（开发员）执行，Vange 拍板。
 
@@ -18,6 +18,8 @@
 | `ISSUE-0006` | opus 广域网压缩优化 | future optimization | open | P3 | WorkBuddy / Hermes | 解决服务端 opus 解码依赖 + 验证广域网压缩收益 |
 | `ISSUE-0009` | 流式 ASR 真人发音准确率基线 | accuracy baseline | open | P3 | WorkBuddy | 真人发音采样评估，记录准确率基线 |
 | `ISSUE-0010` | 会话级路由记忆（指代追问延续慢路径） | feature / routing | open | P2 | WorkBuddy / Hermes | 上轮慢路径→本轮指代追问延续慢路径 + 端到端验证真查 |
+| `ISSUE-0011` | TTS 情感表达换引擎立项 | future improvement | open | P3 | WorkBuddy / Hermes | 引擎选型评估（chat 风格/情感）立项，edge 免费端点不支持 express-as（实测） |
+| `ISSUE-0012` | 语义分级停顿（话题切换更长停顿） | feature | open | P3 | WorkBuddy / Hermes | 话题切换停顿 ≥0.5s 且普通句间不劣化；Spec 补条目 + 真机听感确认（句间连读修复 Spec §4 承诺的后续项，zcode 补登记） |
 
 ## Closed Issue
 
