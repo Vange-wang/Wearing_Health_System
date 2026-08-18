@@ -9,10 +9,11 @@ import time
 
 logger = logging.getLogger("voice-bridge.router")
 
-# 三类路由结果
+# 路由结果（+ DATA：健康数据查询，BLE 立项 Spec §4.1，优先级高于 RAG）
 LIGHTWEIGHT = "lightweight"
 RAG = "rag"
 HERMES = "hermes"
+DATA = "data"
 
 # 会话级路由记忆 TTL（对齐 LLM 历史 600s 过期；超时不再延续上一轮慢路径）
 ROUTE_TTL_SECONDS = 600
@@ -41,9 +42,10 @@ POLITE_WHITELIST = ["谢谢", "再见", "晚安", "早安", "拜拜", "辛苦", 
 
 
 class Router:
-    def __init__(self, tool_keywords: list[str], skill_keywords: list[str]):
+    def __init__(self, tool_keywords: list[str], skill_keywords: list[str], data_keywords: list[str] | None = None):
         self.tool_keywords = [k for k in tool_keywords if k]
         self.skill_keywords = [k for k in skill_keywords if k]
+        self.data_keywords = [k for k in (data_keywords or []) if k]
         # ISSUE-0010：上一轮路由（会话级记忆；单设备够用，多设备需按来源区分）
         self._last_route: str | None = None
         self._last_route_ts: float = 0.0  # _last_route 设置时刻（monotonic），用于 TTL 过期
@@ -61,12 +63,13 @@ class Router:
     def route(self, text: str, rag_hit: bool = False) -> str:
         """返回 LIGHTWEIGHT / RAG / HERMES。
 
-        规则（Spec §3 四步 + ISSUE-0010 会话记忆 + 能力询问/礼貌语识别）：
+        规则（Spec §3 四步 + ISSUE-0010 会话记忆 + 能力询问/礼貌语识别 + DATA）：
         0. 能力询问（能不能/能否/会不会）→ LIGHTWEIGHT；礼貌/结束语 → LIGHTWEIGHT
         1. 命中技能/工具需求关键词 → HERMES（慢路径，先安抚）
-        2. 命中知识库索引（rag_hit=True）→ RAG
-        3. 上轮慢路径（未过 TTL）+ 本轮指代追问 → HERMES（延续慢路径，防跌回轻量编造）
-        4. 其余 → LIGHTWEIGHT
+        2. 命中健康数据关键词（心率/血氧）→ DATA（模板直答，排在 RAG 前）
+        3. 命中知识库索引（rag_hit=True）→ RAG
+        4. 上轮慢路径（未过 TTL）+ 本轮指代追问 → HERMES（延续慢路径，防跌回轻量编造）
+        5. 其余 → LIGHTWEIGHT
         （兜底：轻量失败降级慢路径，在 pipeline 层处理，不在此处）
         """
         # 能力询问优先：问「能不能/能否」→ 快路径直接答，不触发工具、不发安抚语
@@ -89,6 +92,12 @@ class Router:
                 logger.info("route=hermes (tool keyword: %s)", kw)
                 self._set_last_route(HERMES)
                 return HERMES
+        # DATA 路由（BLE 立项 Spec §4.1）：心率/血氧核心词 → 健康数据模板直答，排在 RAG 之前防截胡
+        for kw in self.data_keywords:
+            if kw and kw in text:
+                logger.info("route=data (health data keyword: %s)", kw)
+                self._set_last_route(DATA)
+                return DATA
         if rag_hit:
             logger.info("route=rag")
             self._set_last_route(RAG)

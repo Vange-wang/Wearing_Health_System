@@ -29,6 +29,7 @@ rag:
 router:
   tool_keywords: [查快递, 写文件, 发邮件, 定时, 搜网页, 搜索, 查天气, 帮我查]
   skill_keywords: []
+  data_keywords: [心率, 血氧]
 pipeline:
   sentence_max_chars: 50
   max_frame_bytes: 8388608
@@ -36,5 +37,15 @@ pipeline:
   sentence_gap_ms: 300
   acknowledgements:
     query: [稍等，我帮你查一下, 好的，这就帮你查，请稍等]
+health:
+  hr_high: 100
+  hr_low: 50
+  hr_low_night: 45
+  spo2_low: 95
+  night_start: 23
+  night_end: 6
+  alert_consecutive: 3
+  alert_cooldown_s: 600
+  data_stale_seconds: 300
 log:
   level: INFO

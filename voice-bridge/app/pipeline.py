@@ -18,7 +18,7 @@ from .splitter import SentenceBuffer
 from .vad import VADGate
 from .llm import LLMError, TOOL_SENTINEL
 from .tts import TTSError
-from .router import HERMES, LIGHTWEIGHT, RAG
+from .router import HERMES, LIGHTWEIGHT, RAG, DATA
 
 logger = logging.getLogger("voice-bridge.pipeline")
 
@@ -67,6 +67,8 @@ class StreamingPipeline:
         rag_top_k: int = 3,
         rag_score_threshold: float = 0.0,
         acknowledgements: dict | None = None,
+        health=None,
+        data_stale_seconds: float = 300,
     ):
         self.asr = asr
         self.llm = llm          # 慢路径 Hermes
@@ -81,6 +83,9 @@ class StreamingPipeline:
         self.rag = rag
         self.rag_top_k = int(rag_top_k)
         self.rag_score_threshold = float(rag_score_threshold)
+        # BLE 健康数据（P3 DATA 路由模板直答）：HealthDataStore + 新鲜度阈值
+        self.health = health
+        self.data_stale_seconds = float(data_stale_seconds)
         # 慢路径安抚语池（预合成 WAV，query 池随机轮换）。快路径 ack 已删除（首字达标后不需要）。
         self.acknowledgements = acknowledgements or {}
         self._last_ack_idx: dict = {}
@@ -119,6 +124,34 @@ class StreamingPipeline:
         self._last_ack_idx["query"] = idx
         return pool[idx]
 
+    def _build_health_reply(self) -> str:
+        """P3 DATA 模板直答（Spec §4.1）：根据最新健康数据构造回答，不经 LLM。
+
+        - 有新鲜数据 → 报数值 + 正常/偏高/偏低判断；
+        - 无数据或超新鲜度阈值 → 答「检测暂时中断」（Spec §6 第 7 条）。
+        """
+        if self.health is None:
+            return "健康数据功能正在准备中，接入后就能帮你看了。"
+        hr, spo2, age = self.health.get_latest()
+        if age is None or age > self.data_stale_seconds:
+            return "健康数据检测暂时中断了，请检查腕带是否佩戴好。"
+        parts = []
+        if hr is not None:
+            hr_i = int(round(hr))
+            h = time.localtime().tm_hour
+            low = self.health.hr_low_night if (h >= self.health.night_start or h < self.health.night_end) else self.health.hr_low
+            if hr_i > self.health.hr_high:
+                parts.append(f"心率 {hr_i}，有点偏高")
+            elif hr_i < low:
+                parts.append(f"心率 {hr_i}，有点偏低")
+            else:
+                parts.append(f"心率 {hr_i}，正常")
+        if spo2 is not None:
+            parts.append(f"血氧 {int(round(spo2))}")
+        if not parts:
+            return "健康数据检测暂时中断了，请检查腕带是否佩戴好。"
+        return "您当前" + "，".join(parts) + "。"
+
     async def run(self, samples: np.ndarray, wav_path: Path):
         """批式路径（v0.2/v0.3 兼容）：VAD → 批式 ASR(SenseVoice) → 下游。"""
         self._init_timing()
@@ -154,9 +187,15 @@ class StreamingPipeline:
         route = self.router.route(text, bool(rag_results)) if self.router else HERMES
         self.timing["route"] = route
 
-        if route == HERMES:
+        if route == DATA:
+            # P3 模板直答：不经 LLM，直接构造回答文本（确定性，防 LLM 读错数/编数，Spec §4.1）
+            selected_llm = None
+            final_text = self._build_health_reply()
+            self.timing["llm_backend"] = "template"
+        elif route == HERMES:
             selected_llm = self.llm
             final_text = text
+            self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
         else:
             selected_llm = self.lightweight_llm if self.lightweight_llm is not None else self.llm
             final_text = text
@@ -165,7 +204,7 @@ class StreamingPipeline:
                     f"- {r['doc']['title']}: {r['doc']['text']}" for r in rag_results
                 )
                 final_text = f"【知识库参考，仅据以下内容回答】\n{ctx}\n\n用户问题：{text}"
-        self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
+            self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
 
         # 方向1：快路径路由判定后立即预建 edge 连接（与 LLM 首句生成并行，省 ~0.65s 建连）。
         # 慢路径（Hermes）首句 >2s 才到，预连接会空闲恶化（C3 实测 2s 空闲净等待反而变慢），
@@ -189,19 +228,23 @@ class StreamingPipeline:
         comfort_sent = False
 
         # 轻量/DeepSeek 首步失败（USER.md 读失败 / 网络不可达）→ 降级慢路径（A2 兜底）
-        try:
-            delta_iter = selected_llm.stream_chat(final_text)
-        except LLMError as e:
-            if selected_llm is not self.llm:
-                logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
-                self.timing["route"] = HERMES
-                self.timing["llm_backend"] = getattr(self.llm, "name", "unknown")
-                delta_iter = self.llm.stream_chat(text)
-                # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
-                if preconn_state is not None:
-                    preconn_state["disabled"] = True
-            else:
-                raise
+        # DATA 模板直答：不走 LLM，模板文本直接作为单段「流」（后面分句+TTS 复用）
+        if route == DATA:
+            delta_iter = iter([final_text])
+        else:
+            try:
+                delta_iter = selected_llm.stream_chat(final_text)
+            except LLMError as e:
+                if selected_llm is not self.llm:
+                    logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
+                    self.timing["route"] = HERMES
+                    self.timing["llm_backend"] = getattr(self.llm, "name", "unknown")
+                    delta_iter = self.llm.stream_chat(text)
+                    # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
+                    if preconn_state is not None:
+                        preconn_state["disabled"] = True
+                else:
+                    raise
 
         # 预合成流水线（并发 worker + 序号重排）：
         # produce(LLM 分句) → tts_queue → N worker 并发 TTS → frame_queue → 按序发帧

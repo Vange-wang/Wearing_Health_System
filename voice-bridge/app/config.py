@@ -81,6 +81,20 @@ class Config:
             "查快递", "写文件", "发邮件", "定时", "搜网页", "搜索", "查天气", "查一下", "帮我查",
         ])]
         self.router_skill_keywords = [str(k) for k in router.get("skill_keywords", [])]
+        # BLE 健康数据路由（P3 DATA）：心率/血氧核心词 → 模板直答，排在 RAG 前
+        self.router_data_keywords = [str(k) for k in router.get("data_keywords", ["心率", "血氧"])]
+
+        # BLE 健康监测（立项 Spec §5/§6）：阈值预警 + 数据新鲜度
+        health = self._data.get("health", {})
+        self.health_hr_high = float(health.get("hr_high", 100))
+        self.health_hr_low = float(health.get("hr_low", 50))
+        self.health_hr_low_night = float(health.get("hr_low_night", 45))
+        self.health_spo2_low = float(health.get("spo2_low", 95))
+        self.health_night_start = int(health.get("night_start", 23))
+        self.health_night_end = int(health.get("night_end", 6))
+        self.health_alert_consecutive = int(health.get("alert_consecutive", 3))
+        self.health_alert_cooldown_s = float(health.get("alert_cooldown_s", 600))
+        self.health_data_stale_seconds = float(health.get("data_stale_seconds", 300))
 
         self.log_level = self._data.get("log", {}).get("level", "INFO")
 

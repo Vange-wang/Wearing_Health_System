@@ -6,6 +6,8 @@
 - POST /api/v1/voice/chat/stream → 长度前缀帧流（v0.2/v0.3 批式 ASR，Spec §5.3）
 - POST /api/v1/voice/stream      → raw PCM chunked 流式上传 + 流式 ASR（v0.4 A2）
 - POST /api/v1/knowledge/reload  → 知识库热重载
+- POST /api/v1/health/data       → BOX-3 上报健康数据（心率/血氧，BLE 立项 P3）
+- GET  /api/v1/health/alert      → BOX-3 轮询预警（有预警返回 WAV 帧，BLE 立项 P4）
 
 打点：每步毫秒计时，X-Timing 响应头 + 每请求一条结构化日志（Spec §5）。
 错误码：按 Spec §5.4 错误处理表完整实现。
@@ -20,9 +22,11 @@ from pathlib import Path
 import numpy as np
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel
 
 from .asr import ASRModelLoadError, create_asr, create_streaming_asr, read_wav_16k_mono
 from .config import load_config
+from .health import HealthDataStore
 from .knowledge import KnowledgeBase
 from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
 from .pipeline import FrameTooLargeError, NoSpeechError, StreamingPipeline, encode_frame
@@ -49,6 +53,7 @@ tts = None
 vad = None
 pipeline = None
 knowledge = None
+health_store = None
 asr_load_error: str | None = None
 streaming_asr_load_error: str | None = None
 llm_config_error: str | None = None
@@ -58,7 +63,7 @@ tts_load_error: str | None = None
 @app.on_event("startup")
 async def startup():
     """启动时预加载模型、构造流水线并探测 edge 连通性（Spec §5.1 health）。"""
-    global asr, streaming_asr, llm, lightweight_llm, tts, vad, pipeline, knowledge
+    global asr, streaming_asr, llm, lightweight_llm, tts, vad, pipeline, knowledge, health_store
     global asr_load_error, streaming_asr_load_error, llm_config_error, tts_load_error
     try:
         asr = create_asr(cfg)
@@ -99,7 +104,22 @@ async def startup():
     )
 
     knowledge = KnowledgeBase(cfg.rag_knowledge_dir)
-    router = Router(tool_keywords=cfg.router_tool_keywords, skill_keywords=cfg.router_skill_keywords)
+    router = Router(
+        tool_keywords=cfg.router_tool_keywords,
+        skill_keywords=cfg.router_skill_keywords,
+        data_keywords=cfg.router_data_keywords,
+    )
+    # BLE 健康数据缓存（P3 骨架）：接收 BOX-3 上报 + 阈值预警判定
+    health_store = HealthDataStore(
+        hr_high=cfg.health_hr_high,
+        hr_low=cfg.health_hr_low,
+        hr_low_night=cfg.health_hr_low_night,
+        spo2_low=cfg.health_spo2_low,
+        night_start=cfg.health_night_start,
+        night_end=cfg.health_night_end,
+        alert_consecutive=cfg.health_alert_consecutive,
+        alert_cooldown_s=cfg.health_alert_cooldown_s,
+    )
 
     # 慢路径安抚语预合成（query 池，随机轮换）。快路径 ack 已删除（首字延迟达标）。
     acknowledgements = {"query": []}
@@ -131,6 +151,8 @@ async def startup():
             rag_top_k=cfg.rag_top_k,
             rag_score_threshold=cfg.rag_score_threshold,
             acknowledgements=acknowledgements,
+            health=health_store,
+            data_stale_seconds=cfg.health_data_stale_seconds,
         )
 
 
@@ -150,6 +172,52 @@ def health():
         tts=tts_health,
         vad="enabled" if (vad is not None and vad.enabled) else "disabled",
         llm="hermes" if llm is not None else "unavailable",
+    )
+
+
+class HealthDataIn(BaseModel):
+    """BOX-3 上报的健康数据（BLE 数据帧协议 §2 综合帧的 WiFi 侧形态）。"""
+
+    hr: float | None = None       # 心率 BPM（None=无效）
+    spo2: float | None = None     # 血氧 %（None=无效）
+    seq: int | None = None        # 帧序号（丢帧检测）
+
+
+@app.post("/api/v1/health/data")
+def health_data(data: HealthDataIn):
+    """BOX-3 上报健康数据 → 缓存 + 阈值判定（BLE 立项 P3）。"""
+    if health_store is None:
+        return _err(503, "service_unavailable", "健康数据模块未初始化")
+    health_store.update(data.hr, data.spo2, data.seq)
+    return JSONResponse(status_code=200, content={"status": "ok"})
+
+
+@app.get("/api/v1/health/alert")
+async def health_alert():
+    """BOX-3 空闲轮询预警（BLE 立项 P4 方案 A）：有预警返回 WAV 帧，无则 204。"""
+    if health_store is None or tts is None:
+        return _err(503, "service_unavailable", "健康数据模块未初始化")
+    alert = health_store.poll_alert()
+    if alert is None:
+        return Response(status_code=204)
+    hr = alert.get("hr")
+    spo2 = alert.get("spo2")
+    parts = []
+    if hr is not None:
+        parts.append(f"心率 {int(round(hr))}")
+    if spo2 is not None:
+        parts.append(f"血氧 {int(round(spo2))}")
+    text = "小V提醒您，" + "、".join(parts) + "，建议坐下来休息一下。"
+    try:
+        wav = await tts.synthesize(text)
+        frame = encode_frame(wav, cfg.pipeline_max_frame_bytes)
+    except Exception as e:
+        logger.warning("预警播报 TTS 失败: %s", e)
+        return _err(502, "upstream_error", f"TTS: {e}")
+    return Response(
+        content=frame,
+        media_type="application/octet-stream",
+        headers={"X-Audio-Framing": "wav-length-prefixed"},
     )
 
 
