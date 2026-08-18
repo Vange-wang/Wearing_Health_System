@@ -19,6 +19,7 @@ log = logging.getLogger("mdns")
 SERVICE_TYPE = "_voicebridge._tcp.local."
 HOSTNAME = "voicebridge.local."
 PORT = 8710
+CHECK_INTERVAL_SECONDS = 5  # 网络/IP 检测间隔
 
 
 def get_local_ip() -> str | None:
@@ -41,36 +42,52 @@ def get_local_ip() -> str | None:
 
 
 def main() -> None:
-    # 开机自启时 WiFi 可能未就绪（拿不到局域网 IP），等待最多 60 秒
-    ip = None
-    for _ in range(60):
-        ip = get_local_ip()
-        if ip:
-            break
-        time.sleep(1)
-    if not ip:
-        log.warning("60 秒内未拿到局域网 IP，无法广播 mDNS（设备将连不上）")
-        return
-    log.info("广播 voicebridge.local -> %s (端口 %d)", ip, PORT)
+    """常驻广播：循环检测局域网 IP，IP 变化时自动重新广播。
 
+    解决两个缺陷：
+    1. 开机自启时 WiFi 未就绪 → 不再 60 秒后退出，持续等待网络就绪后广播；
+    2. 电脑切换 WiFi / IP 变化 → 自动 unregister 旧 IP、register 新 IP，
+       设备始终能解析到当前正确的 voicebridge.local。
+    """
     zc = Zeroconf()
-    info = ServiceInfo(
-        SERVICE_TYPE,
-        "voicebridge." + SERVICE_TYPE,
-        addresses=[socket.inet_aton(ip)],
-        port=PORT,
-        server=HOSTNAME,
-        properties={b"app": b"voice-bridge"},
-    )
+    info: ServiceInfo | None = None
+    last_ip: str | None = None
+    log.info("mDNS 常驻广播启动，每 %d 秒检测一次网络", CHECK_INTERVAL_SECONDS)
     try:
-        zc.register_service(info)
-        log.info("mDNS 广播已启动，按 Ctrl+C 停止")
         while True:
-            time.sleep(3600)
+            ip = get_local_ip()
+            try:
+                if ip and ip != last_ip:
+                    # 首次拿到 IP，或 IP 发生变化 →（重新）注册
+                    if info is not None:
+                        zc.unregister_service(info)
+                        log.info("IP 变化 %s -> %s，重新广播", last_ip, ip)
+                    info = ServiceInfo(
+                        SERVICE_TYPE,
+                        "voicebridge." + SERVICE_TYPE,
+                        addresses=[socket.inet_aton(ip)],
+                        port=PORT,
+                        server=HOSTNAME,
+                        properties={b"app": b"voice-bridge"},
+                    )
+                    zc.register_service(info)
+                    log.info("广播 voicebridge.local -> %s (端口 %d)", ip, PORT)
+                    last_ip = ip
+                elif ip is None and last_ip is not None:
+                    # 网络断开 → 撤销广播，等网络恢复后重新广播
+                    log.warning("局域网 IP 丢失（网络断开），暂停 mDNS 广播")
+                    if info is not None:
+                        zc.unregister_service(info)
+                        info = None
+                    last_ip = None
+            except Exception as exc:  # 网络切换瞬间 socket 可能报错，等下一轮重试
+                log.warning("mDNS 广播操作异常：%s（下一轮重试）", exc)
+            time.sleep(CHECK_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         log.info("收到停止信号")
     finally:
-        zc.unregister_service(info)
+        if info is not None:
+            zc.unregister_service(info)
         zc.close()
 
 
