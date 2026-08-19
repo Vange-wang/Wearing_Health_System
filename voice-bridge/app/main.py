@@ -100,6 +100,15 @@ async def startup():
         tts_load_error = str(e)
         logger.error("TTS 初始化失败: %s", e)
 
+    # 需求1：TTS 周期探活（每 5 分钟真实合成一次，更新 last_probe_ok/ts 供固件状态灯）
+    async def _tts_probe_loop():
+        while True:
+            await asyncio.sleep(cfg.tts_probe_interval_s)
+            if tts is not None:
+                await tts.probe()
+    if tts is not None:
+        asyncio.create_task(_tts_probe_loop())
+
     vad = VADGate(
         enabled=cfg.vad_enabled,
         rms_threshold=cfg.vad_rms_threshold,

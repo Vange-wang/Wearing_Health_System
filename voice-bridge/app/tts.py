@@ -373,6 +373,9 @@ class TTSEngine:
         self.primary = primary
         self.configured_primary = primary.name
         self.active_engine = primary.name  # 恒 "edge"
+        # 需求1：真实探活状态（active_engine 恒真不可用，需真实合成探测）
+        self.last_probe_ok: bool | None = None
+        self.last_probe_ts: float | None = None
 
     async def synthesize(self, text: str) -> bytes:
         return await self.primary.synthesize(text)  # 故障抛 TTSError → 502
@@ -391,19 +394,38 @@ class TTSEngine:
         return {
             "configured_primary": self.configured_primary,
             "active_engine": self.active_engine,
+            # 需求1：真实探活结果（供固件状态灯判断 TTS 是否可用）
+            "last_probe_ok": self.last_probe_ok,
+            "last_probe_ts": self.last_probe_ts,
         }
+
+    async def probe(self, timeout: float = 5.0) -> bool:
+        """需求1：真实合成探测一次，更新 last_probe_ok / last_probe_ts。
+
+        返回是否探测成功。edge 故障时置 False（供 health 上报，固件据此灭灯）。
+        """
+        import time as _time
+
+        try:
+            await asyncio.wait_for(self.primary.synthesize("测试"), timeout=timeout)
+            self.last_probe_ok = True
+        except Exception:
+            self.last_probe_ok = False
+        self.last_probe_ts = _time.time()
+        return self.last_probe_ok
 
 
 async def probe_edge(tts: TTSEngine, timeout: float = 3.0) -> None:
-    """启动连通性预检（A5）：发最小合成请求，结果仅记录日志。
+    """启动连通性预检（A5 + 需求1）：发最小合成请求，更新 last_probe_ok/ts。
 
     edge 唯一（无兜底），探测失败不切引擎——请求时自然抛 TTSError → 502。
+    需求1：探测结果写入 tts.last_probe_ok/ts，供 health 上报（固件状态灯判 TTS 可用）。
     """
-    try:
-        await asyncio.wait_for(tts.primary.synthesize("测试"), timeout=timeout)
+    ok = await tts.probe(timeout)
+    if ok:
         logger.info("edge probe OK, active_engine=edge")
-    except Exception as e:
-        logger.warning("edge probe failed: %s（edge 唯一，请求时将报 502）", e)
+    else:
+        logger.warning("edge probe failed（edge 唯一，请求时将报 502）")
 
 
 def create_tts(cfg) -> TTSEngine:

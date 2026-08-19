@@ -10,6 +10,8 @@ class TTSHealth(BaseModel):
     configured_primary: str          # 固定 "edge"
     active_engine: str               # 恒 "edge"（A5 弃 piper）
     fallback_reason: Optional[str] = None  # 恒 None（无兜底）
+    last_probe_ok: Optional[bool] = None   # 需求1：真实合成探活结果（None=未探测）
+    last_probe_ts: Optional[float] = None  # 需求1：最近探活时间戳
 
 
 class HealthResponse(BaseModel):

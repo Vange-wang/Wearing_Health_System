@@ -35,6 +35,7 @@ class Config:
         self.tts_primary = tts.get("primary", "edge")
         self.tts_edge_voice = tts.get("edge_voice", "zh-CN-XiaoxiaoNeural")
         self.tts_edge_probe_timeout = float(tts.get("edge_probe_timeout", 3))
+        self.tts_probe_interval_s = int(tts.get("probe_interval_s", 300))  # 需求1：周期探活间隔
 
         vad = self._data.get("vad", {})
         self.vad_enabled = bool(vad.get("enabled", True))
