@@ -12,6 +12,7 @@
 - 直连：trust_env=False，不信任环境代理（与 v0.1/v0.2 一致）。
 """
 import logging
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -30,6 +31,13 @@ SESSION_TTL_SECONDS = 600  # 10 分钟无交互则清空历史
 # TLS 连接被 DeepSeek 服务端回收，首请求付冷连接 ~1.4s（热连接仅 ~0.6s）。
 # 周期心跳（max_tokens=1 最小请求）保持连接热，llm_ttft 稳定 ~500ms。
 HEARTBEAT_INTERVAL_SECONDS = 240  # 每 4 分钟一次（< TLS 空闲超时，保守）
+
+# 需求3（记忆系统）：个人信息信号词——命中才触发记忆提取，省 token。
+MEMORY_SIGNAL_WORDS = [
+    "我叫", "我的名字", "我英文名", "我喜欢", "我住在", "我家", "我是", "我是做",
+    "记得", "记住", "我今年", "我生日", "我儿子", "我女儿", "我妈", "我爸",
+    "我老婆", "我老公", "我男朋友", "我女朋友", "我工作", "我在",
+]
 
 # 慢路径哨兵：SSE 首次出现工具调用时，stream_chat 产出此对象一次，
 # 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
@@ -236,7 +244,7 @@ class LightweightLLM(LLMBase):
 
     name = "deepseek"
 
-    def __init__(self, api_key: str | None, base_url: str, model: str, user_profile_path):
+    def __init__(self, api_key: str | None, base_url: str, model: str, user_profile_path, memory_store=None):
         if not api_key:
             raise LLMConfigError(
                 "轻量通道 DeepSeek key 未配置（环境变量/ .env）"
@@ -253,6 +261,7 @@ class LightweightLLM(LLMBase):
         )
         self.model = model
         self.user_profile_path = user_profile_path
+        self.memory = memory_store  # 需求3：语音长期记忆（MemoryStore，可选）
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
         # ISSUE-0008：滑动窗口会话历史（多轮指代消解）。
         # 单会话（当前单 BOX-3 设备）；多设备时需按来源区分会话。
@@ -268,11 +277,17 @@ class LightweightLLM(LLMBase):
         profile, ok = load_user_profile(self.user_profile_path)
         if not ok:
             raise LLMError("USER.md 读取失败（轻量通道共用记忆无法注入）")
-        return (
+        prompt = (
             SYSTEM_PROMPT
             + "\n\n以下是用户的长期画像与偏好（来自共享记忆），回复时自然贴合：\n"
             + profile
         )
+        # 需求3：追加语音对话中沉淀的长期记忆（user_facts.md；缺失/为空静默跳过）
+        if self.memory is not None:
+            facts = self.memory.load()
+            if facts:
+                prompt += "\n\n以下是用户语音对话中透露的长期信息：\n" + facts
+        return prompt
 
     def _get_messages(self, user_text: str) -> list[dict]:
         """构造带历史的 messages（ISSUE-0008）：system + 最近 N 轮历史 + 当前 user。
@@ -356,9 +371,55 @@ class LightweightLLM(LLMBase):
             except Exception as e:
                 raise LLMError(f"DeepSeek 流式读取失败: {e}") from e
             # 流正常结束：把这一轮记入历史（ISSUE-0008）
-            self._remember(user_text, "".join(collected))
+            reply = "".join(collected)
+            self._remember(user_text, reply)
+            # 需求3：后台异步提取长期记忆（不阻塞回复，失败静默）
+            if self.memory is not None and self._should_extract_memory(user_text):
+                threading.Thread(
+                    target=self._extract_memory_sync,
+                    args=(user_text, reply),
+                    daemon=True,
+                ).start()
 
         return _iter()
+
+    def _should_extract_memory(self, user_text: str) -> bool:
+        """需求3：个人信息信号词命中才触发提取（省 token）。"""
+        return any(w in user_text for w in MEMORY_SIGNAL_WORDS)
+
+    def _extract_memory_sync(self, user_text: str, assistant_text: str) -> None:
+        """需求3：后台调 DeepSeek 提取本轮对话中的个人信息，写入 user_facts.md。
+
+        输出约定：`NONE` 无信息；`REMEMBER: <类别>: <事实>` 每行一条。
+        失败静默（不影响回复），重试 1 次。
+        """
+        prompt = (
+            "从以下对话中提取值得长期记住的用户个人信息（姓名/称呼/偏好/家庭/身体/地址等）。\n"
+            "无则只输出 NONE；有则每行输出 REMEMBER: <类别>: <事实>，禁止编造。\n\n"
+            f"用户：{user_text}\n小V：{assistant_text}"
+        )
+        for attempt in range(2):
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                    temperature=0,
+                )
+                content = (resp.choices[0].message.content or "").strip()
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line.upper() == "NONE":
+                        break
+                    m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
+                    if m:
+                        added = self.memory.add_fact(m.group(1), m.group(2))
+                        if added:
+                            logger.info("记忆提取新增: [%s] %s", m.group(1).strip(), m.group(2).strip())
+                return
+            except Exception as e:
+                logger.warning("记忆提取失败（第 %d 次）: %s", attempt + 1, e)
+                time.sleep(0.5)
 
     def warmup(self) -> None:
         """A7 启动预热：发最小请求（max_tokens=1），预热 TLS 连接 + 首 token。
@@ -420,8 +481,9 @@ def create_llm(cfg) -> LLMBase:
     return HermesLLM(cfg.llm_api_key(), cfg.llm_api_server_url, cfg.llm_model)
 
 
-def create_lightweight_llm(cfg) -> LLMBase:
-    """工厂：轻量通道 = DeepSeek 裸模型 + USER.md 注入。"""
+def create_lightweight_llm(cfg, memory_store=None) -> LLMBase:
+    """工厂：轻量通道 = DeepSeek 裸模型 + USER.md 注入 +（可选）语音长期记忆。"""
     return LightweightLLM(
-        cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path
+        cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path,
+        memory_store=memory_store,
     )

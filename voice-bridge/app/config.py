@@ -75,6 +75,10 @@ class Config:
         self.rag_top_k = int(rag.get("top_k", 3))
         self.rag_score_threshold = float(rag.get("score_threshold", 0.0))
 
+        # 需求3：语音长期记忆（user_facts.md 路径）
+        memory = self._data.get("memory", {})
+        self.memory_user_facts_path = BASE_DIR / memory.get("user_facts_path", "memory/user_facts.md")
+
         # 路由判定
         router = self._data.get("router", {})
         self.router_tool_keywords = [str(k) for k in router.get("tool_keywords", [
