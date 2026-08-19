@@ -54,11 +54,12 @@ typedef struct {
     uint8_t auth_type;    /* 预留扩展位（本次全 WPA2-PSK） */
 } wifi_cred_t;
 
-/* 默认三组凭据（首次启动写入 NVS；之后改网络改 NVS 不重烧固件） */
+/* 默认三组凭据（首次启动写入 NVS；之后改网络改 NVS 不重烧固件）。
+ * 密码已脱敏（占位符）：实际部署时在此填入，或首次启动后改 NVS。 */
 static const wifi_cred_t DEFAULT_WIFI_CREDS[3] = {
-    { "v2",     "wzwzwzwz",       1, WIFI_AUTH_WPA2_PSK_T },
-    { "2702",   "LISHAN919827@",  2, WIFI_AUTH_WPA2_PSK_T },
-    { "L1122S", "LISHAN919827@",  3, WIFI_AUTH_WPA2_PSK_T },
+    { "v2",     "WIFI_PASS_V2",     1, WIFI_AUTH_WPA2_PSK_T },
+    { "2702",   "WIFI_PASS_HOME_1", 2, WIFI_AUTH_WPA2_PSK_T },
+    { "L1122S", "WIFI_PASS_HOME_2", 3, WIFI_AUTH_WPA2_PSK_T },
 };
 
 #define SAMPLE_RATE  16000

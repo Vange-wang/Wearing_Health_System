@@ -11,6 +11,8 @@
 2. mDNS 客户端解析 voicebridge.local
 3. **多 WiFi 自动切换**（Spec `2026-08-18-多WiFi自动切换-spec_hm.md`）：NVS 三组凭据（v2/2702/L1122S，v2 优先）+ 开机扫描 + 断开重连 + 指数退避——**代码完成，三组切换真机验证待回家补**（见 `Code文档/2026-08-18-网络切换与TTS修复-自测报告_wb.md` §遗留）
 
+> ⚠️ **密码已脱敏**：`voice_agent.c` 里 `DEFAULT_WIFI_CREDS` 的三组密码已改为占位符（`WIFI_PASS_V2`/`WIFI_PASS_HOME_1`/`WIFI_PASS_HOME_2`），推 GitHub 前按 Vange 要求脱敏。**实际部署烧录前需在 `D:\esp-box\examples\voice_agent\main\voice_agent.c`（工作源）填入真实密码**——本归档仅供代码审查，不做直接烧录。
+
 ## 文件
 
 | 文件 | 说明 |
