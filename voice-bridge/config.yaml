@@ -29,7 +29,7 @@ rag:
 memory:
   user_facts_path: memory/user_facts.md
 router:
-  tool_keywords: [查快递, 写文件, 发邮件, 定时, 搜网页, 搜索, 查天气, 帮我查]
+  tool_keywords: [查快递, 写文件, 发邮件, 定时, 搜网页, 搜索, 查天气, 帮我查, 天气, 新闻, 快递, 股票, 股价, 路况, 彩票, 汇率]
   skill_keywords: []
   data_keywords: [心率, 血氧]
 pipeline:
