@@ -239,6 +239,7 @@ class StreamingPipeline:
                     logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
                     self.timing["route"] = HERMES
                     self.timing["llm_backend"] = getattr(self.llm, "name", "unknown")
+                    selected_llm = self.llm  # 需求3：更新实际后端，避免误判提取
                     delta_iter = self.llm.stream_chat(text)
                     # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
                     if preconn_state is not None:
@@ -256,6 +257,7 @@ class StreamingPipeline:
         comfort_queued = False
         tts_wall_t0 = None
         total_sentences = [0]
+        assistant_parts: list[str] = []  # 需求3：收集 LLM 完整回复（回复完成后提取记忆）
 
         async def _claim_preconn():
             """方向1：原子 claim 预连接（仅首个正文句能拿到），失败/已被用/已禁用返回 None。"""
@@ -298,8 +300,10 @@ class StreamingPipeline:
             while True:
                 item = await tts_queue.get()
                 if item is None:
+                    logger.info("worker: 收到结束哨兵，退出")
                     break
                 seq, kind, sentence = item
+                logger.info("worker: 取到任务 seq=%s kind=%s 句子=%r", seq, kind, (sentence or '')[:20])
                 t0 = time.perf_counter()
                 if tts_wall_t0 is None:
                     tts_wall_t0 = t0
@@ -309,6 +313,7 @@ class StreamingPipeline:
                     preconn = await _claim_preconn()
                 # 方案2：优先流式合成（边收边发首帧）；无 stream_synthesize 时回退整句单帧
                 if hasattr(self.tts, "stream_synthesize"):
+                    logger.info("worker: 开始 TTS 合成 seq=%s kind=%s", seq, kind)
                     # 首句优先用预连接；首段失败（emitted_any=False）回退用时建连重合成
                     if preconn is not None:
                         seg_i, last_seg, ok = await _drain_stream(preconn.stream_synthesize(sentence), seq, kind, t0)
@@ -318,6 +323,7 @@ class StreamingPipeline:
                             seg_i, last_seg, _ = await _drain_stream(self.tts.stream_synthesize(sentence), seq, kind, t0)
                     else:
                         seg_i, last_seg, _ = await _drain_stream(self.tts.stream_synthesize(sentence), seq, kind, t0)
+                    logger.info("worker: TTS 合成完成 seq=%s seg_i=%s", seq, seg_i)
                     # 生成器结束：最后一段标记为句尾发出
                     if last_seg is not None:
                         await frame_queue.put(((seq, seg_i), kind, last_seg, True))
@@ -360,16 +366,21 @@ class StreamingPipeline:
 
             try:
                 while True:
+                    logger.info("produce: 等下一个 delta（阻塞读 LLM 流）...")
                     delta = await asyncio.to_thread(_next_delta)
                     if delta is sentinel:
+                        logger.info("produce: 收到 sentinel，流结束")
                         break
-                    # 慢路径哨兵（工具调用）→ 安抚语优先合成（A5）
                     if delta is TOOL_SENTINEL:
+                        logger.info("produce: 收到 TOOL_SENTINEL（工具调用），comfort_queued=%s", comfort_queued)
+                        # 慢路径哨兵（工具调用）→ 安抚语优先合成（A5）
                         if not comfort_queued:
                             await tts_queue.put((seq, "comfort", self.comfort_text))
                             seq += 1
                             comfort_queued = True
                         continue
+                    logger.info("produce: 收到 content 片段 %r", delta[:20])
+                    assistant_parts.append(delta)  # 需求3：累积回复全文，回复完成后提取记忆
                     if not ttft_done:
                         self.timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
                         ttft_done = True
@@ -398,11 +409,13 @@ class StreamingPipeline:
         while not done:
             item = await frame_queue.get()
             if item[0] is None:  # 结束哨兵（produce 已结束）→ 检查是否所有句已发出
+                logger.info("main: 收到结束哨兵 next_sentence_seq=%s total_sentences=%s", next_sentence_seq, total_sentences[0])
                 if next_sentence_seq >= total_sentences[0]:
                     done = True
                 continue
             key, kind, wav, is_end = item
             seq_i, seg_i = key
+            logger.info("main: 收到帧 key=%s kind=%s is_end=%s next_sentence_seq=%s", key, kind, is_end, next_sentence_seq)
             pending[key] = (kind, wav, is_end)
             while (next_sentence_seq, next_seg) in pending:
                 kind, wav, is_end = pending.pop((next_sentence_seq, next_seg))
@@ -427,11 +440,19 @@ class StreamingPipeline:
                 else:
                     next_seg += 1
             if total_sentences[0] > 0 and next_sentence_seq >= total_sentences[0]:
+                logger.info("main: done, next_sentence_seq=%s total=%s", next_sentence_seq, total_sentences[0])
                 done = True
 
         await producer_task
         for w in workers:
             await w
+        # 需求3（改造）：回复完成后统一触发记忆提取（全自动，每轮必做，不依赖流正常结束）。
+        # 覆盖 lightweight/rag 路由（DeepSeek 提取）；hermes 慢路径 Hermes 自带 persistent
+        # memory（豁免），DATA 模板直答无用户新信息（豁免）。
+        if selected_llm is not None and selected_llm is self.lightweight_llm and hasattr(selected_llm, "extract_memory_async"):
+            reply_text = "".join(assistant_parts).strip()
+            if reply_text:
+                selected_llm.extract_memory_async(text, reply_text)
         # 方向1：预连接未被消费则关闭（降级慢路径 / 预连接失败 / 无正文句场景，避免连接泄漏）
         if preconn_state is not None:
             pre = None

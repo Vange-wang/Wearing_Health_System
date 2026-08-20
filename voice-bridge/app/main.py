@@ -515,8 +515,10 @@ async def voice_stream(request: Request):
 
     async def body():
         yield first_frame
+        logger.info("body: 已 yield first_frame，开始迭代 gen")
         try:
             async for frame in gen:
+                logger.info("body: 收到帧 %dB，继续迭代", len(frame))
                 yield frame
         except Exception as e:
             # 后续句 TTS/LLM 失败：已产出的帧照常播放，响应流优雅收尾（不中断连接）

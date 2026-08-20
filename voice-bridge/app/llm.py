@@ -32,13 +32,6 @@ SESSION_TTL_SECONDS = 600  # 10 分钟无交互则清空历史
 # 周期心跳（max_tokens=1 最小请求）保持连接热，llm_ttft 稳定 ~500ms。
 HEARTBEAT_INTERVAL_SECONDS = 240  # 每 4 分钟一次（< TLS 空闲超时，保守）
 
-# 需求3（记忆系统）：个人信息信号词——命中才触发记忆提取，省 token。
-MEMORY_SIGNAL_WORDS = [
-    "我叫", "我的名字", "我英文名", "我喜欢", "我住在", "我家", "我是", "我是做",
-    "记得", "记住", "我今年", "我生日", "我儿子", "我女儿", "我妈", "我爸",
-    "我老婆", "我老公", "我男朋友", "我女朋友", "我工作", "我在",
-]
-
 # 慢路径哨兵：SSE 首次出现工具调用时，stream_chat 产出此对象一次，
 # 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
 TOOL_SENTINEL = object()
@@ -373,29 +366,39 @@ class LightweightLLM(LLMBase):
             # 流正常结束：把这一轮记入历史（ISSUE-0008）
             reply = "".join(collected)
             self._remember(user_text, reply)
-            # 需求3：后台异步提取长期记忆（不阻塞回复，失败静默）
-            if self.memory is not None and self._should_extract_memory(user_text):
-                threading.Thread(
-                    target=self._extract_memory_sync,
-                    args=(user_text, reply),
-                    daemon=True,
-                ).start()
+            # 需求3（改造）：记忆提取已上移 pipeline 层（回复完成后统一触发，覆盖所有路由、
+            # 不依赖流正常结束）。此处不再触发，避免与 pipeline 重复提取。
 
         return _iter()
 
-    def _should_extract_memory(self, user_text: str) -> bool:
-        """需求3：个人信息信号词命中才触发提取（省 token）。"""
-        return any(w in user_text for w in MEMORY_SIGNAL_WORDS)
+    def extract_memory_async(self, user_text: str, assistant_text: str) -> None:
+        """需求3（改造）：后台线程提取长期记忆（全自动，每轮必做）。
+
+        回复完成后由 pipeline 统一调用，不阻塞回复、失败静默。轻量/RAG 路由走此路径；
+        Hermes 慢路径自带 persistent memory（豁免，见 pipeline 判定）。
+        """
+        if self.memory is None:
+            return
+        threading.Thread(
+            target=self._extract_memory_sync,
+            args=(user_text, assistant_text),
+            daemon=True,
+        ).start()
 
     def _extract_memory_sync(self, user_text: str, assistant_text: str) -> None:
-        """需求3：后台调 DeepSeek 提取本轮对话中的个人信息，写入 user_facts.md。
+        """需求3：后台调 DeepSeek 提取本轮对话中的个人信息，写入/删除 user_facts.md。
 
-        输出约定：`NONE` 无信息；`REMEMBER: <类别>: <事实>` 每行一条。
+        输出约定：
+        - `NONE` 无信息；
+        - `REMEMBER: <类别>: <事实>` 每行一条（新增记忆）；
+        - `FORGET: <关键词>` 每行一条（用户明确要求遗忘 → 按关键词删除）。
         失败静默（不影响回复），重试 1 次。
         """
         prompt = (
-            "从以下对话中提取值得长期记住的用户个人信息（姓名/称呼/偏好/家庭/身体/地址等）。\n"
-            "无则只输出 NONE；有则每行输出 REMEMBER: <类别>: <事实>，禁止编造。\n\n"
+            "从下面的对话里，找出用户透露的、值得长期记住的个人信息（姓名、称呼、偏好、家庭、身体、地址、物品等）。\n"
+            "只记录用户亲口说的事实，不要把助手（小V）的提问或猜测当成用户事实。\n"
+            "如果用户明确要求忘记某条信息（例如「忘掉我的单车型号」），输出一行 FORGET: <关键词>，不要为它输出 REMEMBER。\n"
+            "没有值得记录的信息就只输出 NONE；有的话每行输出 REMEMBER: <类别>: <事实>。\n\n"
             f"用户：{user_text}\n小V：{assistant_text}"
         )
         for attempt in range(2):
@@ -411,6 +414,13 @@ class LightweightLLM(LLMBase):
                     line = line.strip()
                     if line.upper() == "NONE":
                         break
+                    # 遗忘指令：按关键词删除对应记忆
+                    fm = re.match(r"FORGET\s*[:：]\s*(.+)", line, re.IGNORECASE)
+                    if fm:
+                        removed = self.memory.remove_by_keyword(fm.group(1).strip())
+                        if removed:
+                            logger.info("记忆遗忘删除 %d 条: %s", removed, fm.group(1).strip())
+                        continue
                     m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
                     if m:
                         added = self.memory.add_fact(m.group(1), m.group(2))
