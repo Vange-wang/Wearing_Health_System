@@ -119,28 +119,46 @@ def test_system_prompt_empty_recent_ok(tmp_path):
     assert "用户喜欢骑车" in prompt
 
 
-# ---------------- 提取解析关键词 ----------------
+# ---------------- 提取解析：结构化属性:值 三段 ----------------
 
-def test_extract_parses_keywords(tmp_path):
-    """提取层解析 REMEMBER ... ;; 关键词: 格式，关键词传给 add_fact。"""
+def test_extract_structured_attribute(tmp_path):
+    """REMEMBER: 类别: 属性: 值 三段 → fact=属性: 值，关键词=[属性,值]。"""
     mem = _MockMemoryClient()
     llm = _make_llm(tmp_path, memory=mem)
     llm.client.chat.completions.create = lambda **kw: _fake_extract_resp(
-        "REMEMBER: 物品: 单车是FACTOR OSTRO VAM ;; 关键词: FACTOR, OSTRO, VAM, 单车"
+        "REMEMBER: 身体: 身高: 175cm"
     )
-    llm._extract_memory_sync("我的单车是FACTOR OSTRO VAM", "好车")
+    llm._extract_memory_sync("我的身高是175cm", "好的")
     assert len(mem.added) == 1
     cat, fact, kws = mem.added[0]
-    assert cat == "物品"
-    assert "FACTOR" in fact
-    assert kws == ["FACTOR", "OSTRO", "VAM", "单车"]
+    assert cat == "身体"
+    assert fact == "身高: 175cm"
+    assert kws == ["身高", "175cm"]
 
 
-def test_extract_legacy_no_keywords(tmp_path):
-    """提取层兼容旧格式（无关键词），仍调 add_fact（keywords=None）。"""
+def test_extract_structured_multiple_attrs(tmp_path):
+    """同一轮多个属性 → 各占一行，分别落盘。"""
     mem = _MockMemoryClient()
     llm = _make_llm(tmp_path, memory=mem)
-    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("REMEMBER: 物品: 单车是FACTOR")
-    llm._extract_memory_sync("我的单车是FACTOR", "好车")
+    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp(
+        "REMEMBER: 身体: 身高: 175cm\nREMEMBER: 身体: 体重: 55kg"
+    )
+    llm._extract_memory_sync("我身高175体重55公斤", "好的")
+    assert len(mem.added) == 2
+    assert mem.added[0][1] == "身高: 175cm"
+    assert mem.added[1][1] == "体重: 55kg"
+
+
+def test_extract_narrative_fact_no_attr(tmp_path):
+    """叙述性事实（无法拆属性-值）→ 整句落盘，keywords=None。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
+    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp(
+        "REMEMBER: 学校: 用户是广东医科大学的学生"
+    )
+    llm._extract_memory_sync("我是广东医科大学的学生", "好的")
     assert len(mem.added) == 1
-    assert mem.added[0][2] is None
+    cat, fact, kws = mem.added[0]
+    assert cat == "学校"
+    assert fact == "用户是广东医科大学的学生"
+    assert kws is None

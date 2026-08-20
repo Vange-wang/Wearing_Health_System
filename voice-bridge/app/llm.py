@@ -388,20 +388,25 @@ class LightweightLLM(LLMBase):
     def _extract_memory_sync(self, user_text: str, assistant_text: str) -> None:
         """后台调 DeepSeek 提取本轮对话中的个人信息，写入/删除共享记忆（memory_server）。
 
-        输出约定：
+        输出约定（配合字段级删除）：
         - `NONE` 无信息；
-        - `REMEMBER: <类别>: <事实>` 每行一条（新增记忆）；
+        - `REMEMBER: <类别>: <属性>: <值>` 结构化属性（如「身体: 身高: 175cm」），
+          fact 落盘为 `属性: 值`、关键词 = 属性名 + 值；
+        - 无法拆成属性-值的叙述性事实（如「用户是广东医科大学的学生」）→
+          `REMEMBER: <类别>: <事实>` 整句（memory_server 对无属性结构走整段删除兜底）；
         - `FORGET: <关键词>` 每行一条（用户明确要求遗忘 → 按关键词删除）。
         失败静默（不影响回复），重试 1 次。
         """
         prompt = (
             "从下面的对话里，找出用户透露的、值得长期记住的个人信息（姓名、称呼、偏好、家庭、身体、地址、物品等）。\n"
             "只记录用户亲口说的事实，不要把助手（小V）的提问或猜测当成用户事实。\n"
-            "如果用户明确要求忘记某条信息（例如「忘掉我的单车型号」），输出一行 FORGET: <关键词>，不要为它输出 REMEMBER。\n"
+            "如果用户明确要求忘记某条信息（例如「忘掉我的身高」），输出一行 FORGET: <属性名>，不要为它输出 REMEMBER。\n"
             "没有值得记录的信息就只输出 NONE。\n"
-            "有值得记录的信息，每行输出：REMEMBER: <类别>: <事实> ;; 关键词: k1,k2,k3\n"
-            "关键词要求：只保留事实里的专有名词（品牌名、型号、人名、地名、机构名、具体数值），2~4 个，用逗号分隔；"
-            "不要填泛化词（单车/自行车/东西/学校 这类统称统一用最简形式，如「单车」）；不要填动词（拥有/骑车/喜欢）。\n\n"
+            "有值得记录的信息时，优先输出结构化「属性: 值」形态，每行：REMEMBER: <类别>: <属性>: <值>\n"
+            "例如「我的身高是175cm」→ REMEMBER: 身体: 身高: 175cm；「单车是FACTOR OSTRO VAM」→ REMEMBER: 物品: 单车: FACTOR OSTRO VAM\n"
+            "属性名要简短（≤20字，如 身高/体重/单车/英文名/学校）；值要具体。\n"
+            "如果事实无法拆成属性-值（叙述性，如「用户是广东医科大学的学生」），则输出整句：REMEMBER: <类别>: <事实>。\n"
+            "同一轮多个属性各占一行。\n\n"
             f"用户：{user_text}\n小V：{assistant_text}"
         )
         for attempt in range(2):
@@ -424,23 +429,28 @@ class LightweightLLM(LLMBase):
                         if removed:
                             logger.info("记忆遗忘删除 %d 条: %s", removed, fm.group(1).strip())
                         continue
-                    m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+?)\s*;;\s*关键词\s*[:：]\s*(.+)", line, re.IGNORECASE)
+                    # 结构化属性：REMEMBER: 类别: 属性: 值
+                    m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
                     if m:
                         category = m.group(1).strip()
-                        fact = m.group(2).strip()
-                        kws = [k.strip() for k in m.group(3).split(",") if k.strip()]
+                        attr = m.group(2).strip()
+                        value = m.group(3).strip()
+                        fact = f"{attr}: {value}"
+                        kws = [attr, value]
                         added = self.memory.add_fact(category, fact, kws)
                         if added:
                             logger.info("记忆提取新增: [%s] %s（关键词: %s）", category, fact, ",".join(kws))
                         else:
                             logger.info("记忆提取去重跳过: %s", fact)
                         continue
-                    # 兼容旧格式（无关键词）
+                    # 叙述性事实（无属性结构）：REMEMBER: 类别: 事实
                     m2 = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
                     if m2:
-                        added = self.memory.add_fact(m2.group(1), m2.group(2), None)
+                        category = m2.group(1).strip()
+                        fact = m2.group(2).strip()
+                        added = self.memory.add_fact(category, fact, None)
                         if added:
-                            logger.info("记忆提取新增: [%s] %s", m2.group(1).strip(), m2.group(2).strip())
+                            logger.info("记忆提取新增: [%s] %s", category, fact)
                 return
             except Exception as e:
                 logger.warning("记忆提取失败（第 %d 次）: %s", attempt + 1, e)
