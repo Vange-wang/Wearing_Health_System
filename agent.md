@@ -1,6 +1,6 @@
-# agent.md — WorkBuddy × Hermes × zcode 协作规范（v1.6，2026-08-19）
+# agent.md — Hermes × zcode × codex 协作规范（v1.7，2026-08-19）
 
-> **本文件是 WorkBuddy、Hermes、zcode 三方在本项目中的协作运行时规范。三方每次开工前必须读取本文件。**
+> **本文件是 Hermes、zcode、codex、WorkBuddy 四方在本项目中的协作运行时规范。四方每次开工前必须读取本文件。**
 > 与 `AGENTS.md` 的分工：`AGENTS.md` 管项目结构/文档优先级/开发纪律；本文件管**协作流程、模型守卫、交接与审查机制**。冲突时以本文件为准（本文件由 Vange 亲定）。
 
 ---
@@ -10,6 +10,7 @@
 | 角色 | 职责 | 强制模型 | 非对应模型时 |
 |---|---|---|---|
 | **zcode（智谱 AI）** | **开发员（全权接管，2026-08-19 起）**：代码开发、自测、部署、集成、技术查证、方案设计 | 智谱 GLM（zcode 环境自带） | — |
+| **codex（OpenAI Codex）** | **复杂任务（2026-08-19 Vange 定）**：高难度编码、疑难问题定位、深度实现 | OpenAI Codex（CLI 环境自带） | — |
 | **Hermes** | 代码审查方：审代码、出审查报告、放行 | **DS V4 Pro**（`deepseek-v4-pro`） | 禁止用其他模型出审查结论；审查调用必须带 `--model deepseek-v4-pro` |
 | **WorkBuddy** | **暂停（2026-08-19 Vange 判定）**：完成 CosyVoice 部署收尾后停止一切事务 | — | — |
 
@@ -150,7 +151,8 @@ REVIEW_PENDING（Hermes 审查，deepseek-v4-pro）
 | 后缀 | 角色 | 职责 |
 |---|---|---|
 | `_hm` | Hermes | 大脑 / 审查方：Spec 起草、审查报告、裁决对齐 |
-| `_zc` | zcode（智谱 AI） | 技术查证 / 方案设计 |
+| `_zc` | zcode（智谱 AI） | 技术查证 / 方案设计 / 代码开发 |
+| `_cdx` | codex（OpenAI Codex） | 复杂任务：高难度编码、疑难问题 |
 | `_wb` | WorkBuddy | **暂停**（2026-08-19 起，开发职责移交 zcode） |
 
 - 示例：`2026-08-17-首字延迟优化查证_wb.md`、`2026-08-16-人设与情感化提示词_hm.md`、`xxx_zc.md`
@@ -172,5 +174,6 @@ REVIEW_PENDING（Hermes 审查，deepseek-v4-pro）
 - **v1.4**（2026-08-16）：Vange 拍板——Kimi K3 无额度，WorkBuddy 代码开发暂用 **deepseek-v4-pro**（恢复 Kimi K3 额度后切回）。
 - **v1.5**（2026-08-17）：新增第三个角色 zcode（智谱 AI）+ 文件命名后缀规范（`_hm` / `_zc` / `_wb`）。
 - **v1.6**（2026-08-19）：Vange 判定——WorkBuddy 暂停（完成 CosyVoice 部署收尾后停止一切事务），开发职责全权移交 zcode；原「动工前核实 Kimi K3」条款废止。详见 `协同工作文档/2026-08-19-角色变更通知-WB暂停-zcode接管_hm.md`。
+- **v1.7**（2026-08-19）：新增角色 codex（OpenAI Codex）——**负责复杂任务**（高难度编码、疑难问题、深度实现），产出文件后缀 `_cdx`。协作方更新为 Hermes × zcode × codex（+ WorkBuddy 暂停保留）。
 
 *本规范由 Vange 于 2026-08-11 下达，Hermes 起草维护（2026-08-19 起），Hermes/zcode 知悉后生效。版本变更需 Vange 同意。*
