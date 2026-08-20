@@ -118,6 +118,7 @@ static EventGroupHandle_t s_wifi_events;
 #define WIFI_BIT_CONNECTED     BIT1
 
 static bool s_mdns_inited = false;
+static volatile bool s_mdns_need_reset = false;   /* WiFi 断开置位，wifi_task 重连前执行 free（不在事件回调里 free，避免阻塞事件循环） */
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -134,6 +135,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             ESP_LOGE(TAG, "WiFi 连续断开 %d 次，触发自动复位", s_wifi_reconnect_fail);
             esp_restart();
         }
+        /* 需求1（自愈）：WiFi 断开后 mDNS 客户端状态会失效（IP 变化 / 底层 socket 失效），
+           需在重连前释放、拿到新 IP 后重新初始化——否则 voicebridge.local 解析永久失败
+           （getaddrinfo 202），只能人工复位。
+           注意：不在事件回调里直接 mdns_free（会阻塞事件循环），只置标志由 wifi_task 执行。 */
+        s_mdns_need_reset = true;
         /* 不在此直接 connect（扫描会阻塞事件循环），通知 wifi_task 重新扫描切换 */
         xEventGroupSetBits(s_wifi_events, WIFI_BIT_DISCONNECTED);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -258,6 +264,13 @@ static void wifi_task(void *arg)
     wifi_scan_and_connect();
     while (1) {
         xEventGroupWaitBits(s_wifi_events, WIFI_BIT_DISCONNECTED, pdTRUE, pdFALSE, portMAX_DELAY);
+        /* 需求1（自愈）：断开后 mDNS 状态失效，重连前在任务上下文释放（不阻塞事件循环） */
+        if (s_mdns_need_reset && s_mdns_inited) {
+            mdns_free();
+            s_mdns_inited = false;
+            s_mdns_need_reset = false;
+            ESP_LOGI(TAG, "mDNS client freed（WiFi 断开，重连后重建）");
+        }
         /* 指数退避：连续失败越多等越久（1s 起步，上限 30s），避免信号边缘来回切换 */
         int shift = s_wifi_reconnect_fail < 5 ? s_wifi_reconnect_fail : 5;
         int backoff = 1000 << shift;
