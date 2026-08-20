@@ -258,28 +258,43 @@ static void wifi_scan_and_connect(void)
     free(aps);
 }
 
-/* WiFi 管理任务：首次扫描连接 + 断开后重新扫描切换（带指数退避） */
+/* WiFi 管理任务：首次扫描连接 + 断开后持续重试扫描直到重连（带指数退避）。
+ * 修复：断开后扫描失败（如热点广播尚未恢复、无匹配凭据）时，原实现只扫一次就
+ * 回到等待断开事件，而事件位已被消费不会再触发 → 永久卡在断网。现改为内层
+ * while(!s_wifi_up) 持续重试，直到 got IP 置 s_wifi_up 才回到等待断开事件。 */
 static void wifi_task(void *arg)
 {
-    wifi_scan_and_connect();
     while (1) {
+        int retry = 0;
+        while (!s_wifi_up) {
+            /* 断开后 mDNS 状态失效，重连前在任务上下文释放（不阻塞事件循环） */
+            if (s_mdns_need_reset && s_mdns_inited) {
+                mdns_free();
+                s_mdns_inited = false;
+                s_mdns_need_reset = false;
+                ESP_LOGI(TAG, "mDNS client freed（WiFi 断开，重连后重建）");
+            }
+            /* 指数退避：首次立即扫，之后 1s/2s/4s/... 封顶 30s */
+            if (retry > 0) {
+                int shift = retry < 6 ? (retry - 1) : 5;
+                int backoff = 1000 << shift;
+                if (backoff > 30000) {
+                    backoff = 30000;
+                }
+                ESP_LOGI(TAG, "重连扫描（第 %d 次，退避 %d ms）", retry, backoff);
+                vTaskDelay(pdMS_TO_TICKS(backoff));
+            } else {
+                ESP_LOGI(TAG, "重连扫描（首次/立即）");
+            }
+            wifi_scan_and_connect();
+            /* 等 connect + DHCP 完成（最多 5s），连上则 s_wifi_up 置位退出内层循环 */
+            for (int i = 0; i < 10 && !s_wifi_up; i++) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            retry++;
+        }
+        /* 已连接：等待断开事件（断开时置 s_wifi_up=false 唤醒外层循环） */
         xEventGroupWaitBits(s_wifi_events, WIFI_BIT_DISCONNECTED, pdTRUE, pdFALSE, portMAX_DELAY);
-        /* 需求1（自愈）：断开后 mDNS 状态失效，重连前在任务上下文释放（不阻塞事件循环） */
-        if (s_mdns_need_reset && s_mdns_inited) {
-            mdns_free();
-            s_mdns_inited = false;
-            s_mdns_need_reset = false;
-            ESP_LOGI(TAG, "mDNS client freed（WiFi 断开，重连后重建）");
-        }
-        /* 指数退避：连续失败越多等越久（1s 起步，上限 30s），避免信号边缘来回切换 */
-        int shift = s_wifi_reconnect_fail < 5 ? s_wifi_reconnect_fail : 5;
-        int backoff = 1000 << shift;
-        if (backoff > 30000) {
-            backoff = 30000;
-        }
-        ESP_LOGI(TAG, "重新扫描前退避 %d ms", backoff);
-        vTaskDelay(pdMS_TO_TICKS(backoff));
-        wifi_scan_and_connect();
     }
 }
 
