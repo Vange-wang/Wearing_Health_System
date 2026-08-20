@@ -1,16 +1,18 @@
 # voice_agent 固件归档说明
 
-- **归档日期**：2026-08-19 · **更新**：2026-08-20（zcode，屏幕 emoji 状态显示）
+- **归档日期**：2026-08-19 · **更新**：2026-08-21（zcode，屏幕 emoji + Boot 键说话 + WiFi 断网自动重连）
 - **工作源目录**：`D:\esp-box\examples\voice_agent\main\`（ESP-IDF 工程，在此目录编译烧录）
 
-## 版本快照（2026-08-20，屏幕 emoji 版）
+## 版本快照（2026-08-21）
 
 本归档对应当前真机运行的版本，功能：
 
-1. 按住说话（GPIO0 顶部圆键）：ES7210 双麦录音 → 降混 → chunked 流式上传 raw PCM → 收长度前缀 WAV 帧 → ES8311 播放（`voice-bridge`，voicebridge.local:8710）
-2. mDNS 客户端解析 voicebridge.local
-3. **多 WiFi 自动切换**（Spec `2026-08-18-多WiFi自动切换-spec_hm.md`）：NVS 三组凭据（v2/2702/L1122S，v2 优先）+ 开机扫描 + 断开重连 + 指数退避
-4. **屏幕 emoji 状态显示**（Spec `2026-08-19-状态灯与联网搜索-实现方案_zc.md` 需求 1）：LVGL + SPIFFS 4 态 emoji（😄/😵/🤐/🌚），30s 轮询 `/api/v1/health` + WiFi 状态即时重判，WiFi 断时用 vb 缓存
+1. **按住 Boot 键（GPIO0）说话**：ES7210 双麦录音 → 降混 → chunked 流式上传 raw PCM → 收长度前缀 WAV 帧 → ES8311 播放（`voice-bridge`，voicebridge.local:8710）；顶部键（GPIO1）为静音，复位用硬件 Reset 键
+2. mDNS 客户端解析 voicebridge.local（纯 mDNS，无固定 IP 兜底；mDNS 解析失败时重启 iPhone 热点恢复）
+3. **多 WiFi 自动切换**：NVS 三组凭据（v2/2702/L1122S，v2 优先）+ 开机扫描 + 断开重连 + 指数退避
+4. **WiFi 断网自动重连**：断开后持续重试扫描（指数退避 1s/2s/4s…封顶 30s），不再永久卡断
+5. **mDNS 断开自愈**：WiFi 断开时释放 mDNS、重连拿 IP 后重建，避免解析永久失败
+6. **屏幕 emoji 状态显示**：LVGL + SPIFFS 4 态 emoji（😄/😵/🤐/🌚），30s 轮询 `/api/v1/health` + WiFi 状态即时重判，WiFi 断时用 vb 缓存
 
 > ⚠️ **密码已脱敏**：`voice_agent.c` 里 `DEFAULT_WIFI_CREDS` 的三组密码已改为占位符（`WIFI_PASS_V2`/`WIFI_PASS_HOME_1`/`WIFI_PASS_HOME_2`），推 GitHub 前按 Vange 要求脱敏。**实际部署烧录前需在 `D:\esp-box\examples\voice_agent\main\voice_agent.c`（工作源）填入真实密码**——本归档仅供代码审查，不做直接烧录。
 

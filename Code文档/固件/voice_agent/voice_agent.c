@@ -3,11 +3,12 @@
  *
  * voice_agent — v0.4 真机语音终端（WorkBuddy, 2026-08-16）
  *
- * 按键按住说话（push-to-talk）：
- *   1. 按住 BSP_BUTTON_CONFIG（GPIO0）→ ES7210 双麦录音（16k/16bit 立体声）
+ * 按键（push-to-talk）：
+ *   1. 按住 Boot 键 BSP_BUTTON_CONFIG（GPIO0）→ ES7210 双麦录音（16k/16bit 立体声）
  *   2. 边录边降混为单声道，通过 HTTP chunked 流式上传 PCM 到 voice-bridge
  *   3. 松开按键 → 结束请求流（结束信号）→ 服务端流式 ASR → 返回长度前缀 WAV 帧
  *   4. 逐帧解析（4 字节大端长度 + WAV），跳过 44 字节 WAV 头 → 单声道升混 → ES8311 播放
+ *   （复位用硬件 Reset 键，顶部键 GPIO1 为静音键）
  *
  * 依据：2026-08-16-语音桥-spec-v0.4.md（A1 raw PCM、A2 流式 ASR、A3 按键触发）
  */
@@ -39,10 +40,10 @@ static const char *TAG = "voice_agent";
 
 /* ---- 可配置项（按现场改） ---- */
 #define SERVER_URL   "http://voicebridge.local:8710/api/v1/voice/stream"
-#define TALK_BUTTON  BSP_BUTTON_MUTE     /* GPIO1 顶部圆键：按住说话 */
+#define HEALTH_URL   "http://voicebridge.local:8710/api/v1/health"
+#define TALK_BUTTON  BSP_BUTTON_CONFIG   /* Boot 键（GPIO0）：按住说话（顶部键 GPIO1 为静音，复位用硬件 Reset 键） */
 
 /* ---- 屏幕 emoji 状态显示（需求1 替代状态灯，Spec 2026-08-20 §1.3） ---- */
-#define HEALTH_URL   "http://voicebridge.local:8710/api/v1/health"
 #define EMOJI_OK      "S:/spiffs/emoji_u1f604.png"  /* 大笑 😄：vb可用+WiFi可用 */
 #define EMOJI_WIFI_DN "S:/spiffs/emoji_u1f635.png"  /* 晕 😵：vb可用+WiFi不可用 */
 #define EMOJI_VB_DN   "S:/spiffs/emoji_u1f910.png"  /* 闭嘴 🤐：vb不可用+WiFi正常 */
@@ -117,7 +118,7 @@ static EventGroupHandle_t s_wifi_events;
 #define WIFI_BIT_DISCONNECTED  BIT0
 #define WIFI_BIT_CONNECTED     BIT1
 
-static bool s_mdns_inited = false;
+static volatile bool s_mdns_inited = false;
 static volatile bool s_mdns_need_reset = false;   /* WiFi 断开置位，wifi_task 重连前执行 free（不在事件回调里 free，避免阻塞事件循环） */
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -670,13 +671,12 @@ void app_main(void)
     /* 屏幕 emoji 状态任务（低优先级，30s 轮询 + WiFi 状态变化即时重判） */
     xTaskCreate(status_task, "status", 4096, NULL, 4, NULL);
 
-    /* 按键：按住说话（顶部圆键=GPIO1=MUTE，Boot键=GPIO0=CONFIG 双注册） */
+    /* 按键：Boot 键（GPIO0=CONFIG）按住说话；顶部键（GPIO1=MUTE）静音。
+     * 复位用硬件 Reset 键（无需软件处理）。 */
     bsp_btn_init();
-    bsp_btn_register_callback(BSP_BUTTON_MUTE, BUTTON_PRESS_DOWN, talk_btn_cb, NULL);
-    bsp_btn_register_callback(BSP_BUTTON_MUTE, BUTTON_PRESS_UP, talk_btn_cb, NULL);
     bsp_btn_register_callback(BSP_BUTTON_CONFIG, BUTTON_PRESS_DOWN, talk_btn_cb, NULL);
     bsp_btn_register_callback(BSP_BUTTON_CONFIG, BUTTON_PRESS_UP, talk_btn_cb, NULL);
-    ESP_LOGI(TAG, "push-to-talk ready: hold TOP button to speak");
+    ESP_LOGI(TAG, "push-to-talk ready: hold Boot button to speak");
 
     /* 对话任务：独立任务跑 talk_task，播放可被按键打断（app_main 主任务返回） */
     xTaskCreate(talk_task, "talk", 8192, NULL, 5, NULL);
