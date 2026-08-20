@@ -40,6 +40,13 @@ IMPERATIVE_HINTS = ["帮我", "替我", "给我", "请你", "麻烦"]
 # 礼貌/结束语白名单：这些词不是追问，直接走快路径（否则慢路径后说「谢谢」会被判为追问 → 慢路径 10~18s）
 POLITE_WHITELIST = ["谢谢", "再见", "晚安", "早安", "拜拜", "辛苦", "不用", "没事", "好的", "嗯嗯", "收到", "好嘞"]
 
+# 宽词（描述性疑问词）：「XX怎么样/是什么/的情况」类实体查询会命中，但短句闲聊
+# （单说「怎么样？」「是什么？」）也会命中 → 需加长度校验（阶段2），避免误走慢路径。
+BROAD_QUERY_WORDS = ["怎么样", "是什么", "的情况", "如何", "好不好", "了解下", "介绍下"]
+
+# 宽词命中判 HERMES 的最小句长（< 此值视为闲聊/指代，退回原逻辑）
+BROAD_QUERY_MIN_LEN = 5
+
 
 class Router:
     def __init__(self, tool_keywords: list[str], skill_keywords: list[str], data_keywords: list[str] | None = None):
@@ -89,6 +96,12 @@ class Router:
                 return HERMES
         for kw in self.tool_keywords:
             if kw and kw in text:
+                # 阶段2：宽词（怎么样/是什么/的情况/如何/好不好/了解下/介绍下）命中时，
+                # 需句长 ≥ BROAD_QUERY_MIN_LEN 才视为实体查询走慢路径；短句闲聊退回原逻辑。
+                # 祈使词族（查一下/看一下/找一下 等）不受长度限制，直接走慢路径。
+                if kw in BROAD_QUERY_WORDS and len(text) < BROAD_QUERY_MIN_LEN:
+                    logger.info("route 宽词命中但句长过短（%d 字），退回原逻辑: %s", len(text), kw)
+                    continue
                 logger.info("route=hermes (tool keyword: %s)", kw)
                 self._set_last_route(HERMES)
                 return HERMES

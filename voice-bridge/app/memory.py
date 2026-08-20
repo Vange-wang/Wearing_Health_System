@@ -45,21 +45,33 @@ class MemoryStore:
             if line.strip() and not line.strip().startswith("#")
         ]
 
-    def add_fact(self, category: str, fact: str) -> bool:
+    def add_fact(self, category: str, fact: str, keywords: list[str] | None = None) -> bool:
         """追加一条记忆（去重），返回是否真的新增。
 
-        去重：事实文本已出现在任一条目（或反之）则跳过，避免重复积累。
+        去重（方案 B，Hermes 裁决）：
+        - 子串匹配兜底（旧条目/无关键词场景）；
+        - 关键词重叠度：交集/较小集 ≥ 阈值判重（<3 个关键词阈值 0.8，≥3 个阈值 0.6）。
         裁剪：超 MAX_FACTS 条裁最旧；超 MAX_BYTES 字节裁最旧（简单按条裁）。
         """
         fact = fact.strip()
         if not fact:
             return False
+        kws = [k.strip() for k in (keywords or []) if k and k.strip()]
         entry = f"{time.strftime('%Y-%m-%d')} | {category.strip() or 'general'} | {fact}"
+        if kws:
+            entry += " | " + ",".join(kws)
         with self._lock:
             facts = self.get_facts()
             for existing in facts:
-                if fact in existing or existing in fact:
+                # 子串匹配兜底
+                existing_fact = self._extract_fact(existing)
+                if fact in existing_fact or existing_fact in fact:
                     return False
+                # 关键词重叠度判重（仅当新条目有关键词时）
+                if kws:
+                    existing_kws = self._extract_keywords(existing)
+                    if existing_kws and self._overlap(kws, existing_kws):
+                        return False
             facts.append(entry)
             if len(facts) > MAX_FACTS:
                 facts = facts[-MAX_FACTS:]
@@ -75,6 +87,35 @@ class MemoryStore:
                 logger.warning("记忆写入失败: %s", e)
                 return False
         return True
+
+    @staticmethod
+    def _extract_fact(entry: str) -> str:
+        """从四段条目（日期|类别|事实|关键词）提取事实段；兼容旧三段条目。"""
+        parts = entry.split("|")
+        return parts[2].strip() if len(parts) >= 3 else entry.strip()
+
+    @staticmethod
+    def _extract_keywords(entry: str) -> list[str]:
+        """从四段条目提取关键词列表；旧三段条目返回空。"""
+        parts = entry.split("|")
+        if len(parts) < 4:
+            return []
+        return [k.strip() for k in parts[3].split(",") if k.strip()]
+
+    @staticmethod
+    def _overlap(a: list[str], b: list[str]) -> bool:
+        """关键词重叠度判重：交集/较小集合 ≥ 阈值。
+
+        Hermes 修正①：<3 个关键词阈值 0.8（小集合 0.6 太松易误杀），≥3 个保持 0.6。
+        """
+        sa, sb = set(a), set(b)
+        if not sa or not sb:
+            return False
+        inter = len(sa & sb)
+        smaller = min(len(sa), len(sb))
+        if smaller < 3:
+            return inter / smaller >= 0.8
+        return inter / smaller >= 0.6
 
     def remove_by_keyword(self, keyword: str) -> int:
         """按关键词删除条目（遗忘指令「忘掉我叫什么」），返回删除数。"""

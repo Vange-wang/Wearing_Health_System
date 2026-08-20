@@ -398,7 +398,10 @@ class LightweightLLM(LLMBase):
             "从下面的对话里，找出用户透露的、值得长期记住的个人信息（姓名、称呼、偏好、家庭、身体、地址、物品等）。\n"
             "只记录用户亲口说的事实，不要把助手（小V）的提问或猜测当成用户事实。\n"
             "如果用户明确要求忘记某条信息（例如「忘掉我的单车型号」），输出一行 FORGET: <关键词>，不要为它输出 REMEMBER。\n"
-            "没有值得记录的信息就只输出 NONE；有的话每行输出 REMEMBER: <类别>: <事实>。\n\n"
+            "没有值得记录的信息就只输出 NONE。\n"
+            "有值得记录的信息，每行输出：REMEMBER: <类别>: <事实> ;; 关键词: k1,k2,k3\n"
+            "关键词要求：只保留事实里的专有名词（品牌名、型号、人名、地名、机构名、具体数值），2~4 个，用逗号分隔；"
+            "不要填泛化词（单车/自行车/东西/学校 这类统称统一用最简形式，如「单车」）；不要填动词（拥有/骑车/喜欢）。\n\n"
             f"用户：{user_text}\n小V：{assistant_text}"
         )
         for attempt in range(2):
@@ -421,11 +424,23 @@ class LightweightLLM(LLMBase):
                         if removed:
                             logger.info("记忆遗忘删除 %d 条: %s", removed, fm.group(1).strip())
                         continue
-                    m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
+                    m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+?)\s*;;\s*关键词\s*[:：]\s*(.+)", line, re.IGNORECASE)
                     if m:
-                        added = self.memory.add_fact(m.group(1), m.group(2))
+                        category = m.group(1).strip()
+                        fact = m.group(2).strip()
+                        kws = [k.strip() for k in m.group(3).split(",") if k.strip()]
+                        added = self.memory.add_fact(category, fact, kws)
                         if added:
-                            logger.info("记忆提取新增: [%s] %s", m.group(1).strip(), m.group(2).strip())
+                            logger.info("记忆提取新增: [%s] %s（关键词: %s）", category, fact, ",".join(kws))
+                        else:
+                            logger.info("记忆提取去重跳过: %s", fact)
+                        continue
+                    # 兼容旧格式（无关键词）
+                    m2 = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
+                    if m2:
+                        added = self.memory.add_fact(m2.group(1), m2.group(2), None)
+                        if added:
+                            logger.info("记忆提取新增: [%s] %s", m2.group(1).strip(), m2.group(2).strip())
                 return
             except Exception as e:
                 logger.warning("记忆提取失败（第 %d 次）: %s", attempt + 1, e)

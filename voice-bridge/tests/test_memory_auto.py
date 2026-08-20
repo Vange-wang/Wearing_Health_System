@@ -87,3 +87,75 @@ def test_remember_and_forget_combined(tmp_path):
     facts = store.get_facts()
     assert any("捷安特" in f for f in facts)
     assert not any("旧款" in f for f in facts)
+
+
+# ---------------- 去重（方案B 关键词重叠度，Hermes 裁决） ----------------
+
+def test_keyword_overlap_dedup_same_fact_different_wording(tmp_path):
+    """同一事实不同措辞，关键词高度重叠 → 判重只记 1 条。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    # 第一次：单车是 FACTOR OSTRO VAM
+    assert store.add_fact("物品", "单车是FACTOR OSTRO VAM", ["FACTOR", "OSTRO", "VAM", "单车"])
+    # 第二次：措辞不同，但关键词重叠 4/4
+    assert not store.add_fact("物品", "用户的自行车是FACTOR OSTRO VAM型号", ["FACTOR", "OSTRO", "VAM", "单车"])
+    assert len(store.get_facts()) == 1
+
+
+def test_keyword_overlap_dedup_partial_overlap(tmp_path):
+    """关键词部分重叠（≥3 个时阈值 0.6）→ 判重。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    store.add_fact("物品", "单车是FACTOR OSTRO VAM", ["FACTOR", "OSTRO", "VAM", "单车"])
+    # 关键词 3/4 重叠（FACTOR/OSTRO/VAM），阈值 0.6 → 判重
+    assert not store.add_fact("物品", "单车品牌FACTOR型号OSTRO VAM", ["FACTOR", "OSTRO", "VAM"])
+    assert len(store.get_facts()) == 1
+
+
+def test_different_facts_not_deduped(tmp_path):
+    """不同事实关键词不重叠 → 分别记录，不误杀。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    assert store.add_fact("物品", "单车是FACTOR OSTRO VAM", ["FACTOR", "OSTRO", "VAM", "单车"])
+    assert store.add_fact("学校", "广东医科大学", ["广东医科大学", "大学"])
+    assert len(store.get_facts()) == 2
+
+
+def test_small_keyword_set_higher_threshold(tmp_path):
+    """关键词 <3 个时阈值 0.8：2 个关键词重叠 1 个（0.5 < 0.8）不判重；全重叠（1.0）判重。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    # 2 个关键词完全重叠 → 判重
+    assert store.add_fact("物品", "单车FACTOR", ["FACTOR", "单车"])
+    assert not store.add_fact("物品", "单车就是FACTOR", ["FACTOR", "单车"])
+    # 2 个关键词重叠 1 个（0.5 < 0.8）→ 不判重
+    assert store.add_fact("物品", "单车Giant", ["Giant", "单车"])
+    assert len(store.get_facts()) == 2
+
+
+def test_empty_keywords_fallback_substring(tmp_path):
+    """无关键词时退回子串匹配兜底。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    assert store.add_fact("物品", "单车是FACTOR", None)
+    # 无关键词的新条目，靠子串匹配判重（旧逻辑）
+    assert not store.add_fact("物品", "单车是FACTOR", None)
+    assert len(store.get_facts()) == 1
+
+
+def test_extract_parses_keywords(tmp_path):
+    """提取层解析 REMEMBER ... ;; 关键词: 格式，把关键词传给 add_fact。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    llm = _make_llm(tmp_path, memory_store=store)
+    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp(
+        "REMEMBER: 物品: 单车是FACTOR OSTRO VAM ;; 关键词: FACTOR, OSTRO, VAM, 单车"
+    )
+    llm._extract_memory_sync("我的单车是FACTOR OSTRO VAM", "好车")
+    facts = store.get_facts()
+    assert len(facts) == 1
+    assert "FACTOR" in facts[0] and "VAM" in facts[0]  # 关键词已写入四段格式
+
+
+def test_extract_legacy_no_keywords(tmp_path):
+    """提取层兼容旧格式（无关键词），仍能新增。"""
+    store = MemoryStore(tmp_path / "user_facts.md")
+    llm = _make_llm(tmp_path, memory_store=store)
+    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("REMEMBER: 物品: 单车是FACTOR")
+    llm._extract_memory_sync("我的单车是FACTOR", "好车")
+    assert "FACTOR" in store.load()
+

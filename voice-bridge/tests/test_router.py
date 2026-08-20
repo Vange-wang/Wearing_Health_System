@@ -13,7 +13,9 @@ from app.router import Router, LIGHTWEIGHT, HERMES
 
 def _router():
     return Router(
-        tool_keywords=["查快递", "写文件", "发邮件", "定时", "搜网页", "搜索", "查天气", "帮我查"],
+        tool_keywords=["查快递", "写文件", "发邮件", "定时", "搜网页", "搜索", "查天气", "帮我查",
+                       "查一下", "查查", "查下", "看一下", "看看", "看下", "找一下", "找找", "找下",
+                       "怎么样", "的情况", "如何", "好不好", "是什么", "了解下", "介绍下"],
         skill_keywords=[],
     )
 
@@ -68,3 +70,25 @@ def test_new_topic_breaks_followup():
     r = _router()
     r.route("帮我查天气")
     assert r.route("讲个笑话") == LIGHTWEIGHT  # 新话题信号「讲」
+
+
+def test_imperative_word_family_routes_hermes():
+    """祈使词族（查一下/看一下/找一下）→ 慢路径，不受长度限制。"""
+    r = _router()
+    assert r.route("查一下广东医科大学") == HERMES
+    assert r.route("看一下今天天气") == HERMES
+    assert r.route("找一下快递") == HERMES
+
+
+def test_broad_word_long_entity_query_routes_hermes():
+    """宽词（怎么样/的情况）命中 + 句长 ≥5 → 实体查询走慢路径。"""
+    r = _router()
+    assert r.route("广东医科大学怎么样") == HERMES
+    assert r.route("东莞今天天气的情况") == HERMES
+
+
+def test_broad_word_short_chat_stays_lightweight():
+    """宽词命中但句长 <5（单说「怎么样？」）→ 退回原逻辑，不误走慢路径。"""
+    r = _router()
+    assert r.route("怎么样") == LIGHTWEIGHT
+    assert r.route("是什么") == LIGHTWEIGHT
