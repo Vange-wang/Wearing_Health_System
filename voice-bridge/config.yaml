@@ -27,7 +27,9 @@ rag:
   top_k: 3
   score_threshold: 1.0
 memory:
-  user_facts_path: memory/user_facts.md
+  api_url: http://127.0.0.1:8781/api/v1/memory
+  inject_budget: 6144
+  file_path: ~/.hermes/memories/MEMORY.md
 router:
   tool_keywords: [查快递, 写文件, 发邮件, 定时, 搜网页, 搜索, 查天气, 帮我查, 天气, 新闻, 快递, 股票, 股价, 路况, 彩票, 汇率, 查一下, 查查, 查下, 看一下, 看看, 看下, 找一下, 找找, 找下, 怎么样, 的情况, 如何, 好不好, 是什么, 了解下, 介绍下]
   skill_keywords: []

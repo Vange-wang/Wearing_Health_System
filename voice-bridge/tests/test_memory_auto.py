@@ -1,17 +1,40 @@
-"""需求3 记忆全自动改造单测：全自动触发 + FORGET 遗忘分支。
+"""需求3 记忆单测（单一记忆源 v2）：全自动触发 + FORGET 遗忘 + 注入 + 客户端调用。
 
-不依赖真实 DeepSeek API，mock client 返回指定提取结果，验证 memory 读写正确。
+不依赖真实 DeepSeek API 和 memory_server，mock client 返回指定提取结果、
+mock MemoryClient 记录调用，验证 llm.py 编排正确。
 """
 import threading
+import time
 
 from app.llm import LightweightLLM
-from app.memory import MemoryStore
 
 
-def _make_llm(tmp_path, memory_store=None):
+class _MockMemoryClient:
+    """记录 add_fact / remove_by_keyword / load_recent 调用，返回可控结果。"""
+
+    def __init__(self, recent: str = ""):
+        self.recent = recent
+        self.added = []        # (category, fact, keywords)
+        self.removed = []      # [keyword, ...]
+        self._add_return = True
+        self._remove_return = 1
+
+    def load_recent(self) -> str:
+        return self.recent
+
+    def add_fact(self, category, fact, keywords=None) -> bool:
+        self.added.append((category, fact, keywords))
+        return self._add_return
+
+    def remove_by_keyword(self, keyword) -> int:
+        self.removed.append(keyword)
+        return self._remove_return
+
+
+def _make_llm(tmp_path, memory=None):
     profile = tmp_path / "USER.md"
     profile.write_text("用户喜欢骑车。", encoding="utf-8")
-    llm = LightweightLLM("k", "http://127.0.0.1:1", "m", str(profile), memory_store=memory_store)
+    llm = LightweightLLM("k", "http://127.0.0.1:1", "m", str(profile), memory_store=memory)
     return llm
 
 
@@ -23,139 +46,101 @@ def _fake_extract_resp(text):
     return resp
 
 
-def test_forget_removes_matching_facts(tmp_path):
-    """FORGET: <关键词> 应调用 remove_by_keyword 删除对应条目。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    store.add_fact("possession", "单车是捷安特")
-    store.add_fact("identity", "英文名 Vange")
-    assert len(store.get_facts()) == 2
-
-    llm = _make_llm(tmp_path, memory_store=store)
-    # mock：提取结果只有 FORGET 分支（用户说「忘掉我的单车」）
-    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("FORGET: 单车")
-    llm._extract_memory_sync("忘掉我的单车", "好的，已经忘记了。")
-
-    facts = store.get_facts()
-    assert len(facts) == 1
-    assert "英文名 Vange" in facts[0]
+def test_forget_calls_remove_by_keyword(tmp_path):
+    """FORGET: <关键词> 应调用 memory.remove_by_keyword。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
+    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("FORGET: 英文名字")
+    llm._extract_memory_sync("忘掉我的英文名", "好的。")
+    assert mem.removed == ["英文名字"]
 
 
-def test_remember_adds_without_signal_word(tmp_path):
-    """全自动提取：无信号词也照常新增（改造前会漏，见任务单现状1）。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    llm = _make_llm(tmp_path, memory_store=store)
-    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("REMEMBER: possession: 单车是捷安特")
-    # 「单车是捷安特」不含 MEMORY_SIGNAL_WORDS，但改造后仍应提取
-    llm._extract_memory_sync("我的单车是捷安特", "好车！")
-    assert "捷安特" in store.load()
+def test_remember_calls_add_fact(tmp_path):
+    """全自动提取：无信号词也照常调 add_fact 写入。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
+    llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("REMEMBER: 物品: 单车是FACTOR")
+    llm._extract_memory_sync("我的单车是FACTOR", "好车！")
+    assert len(mem.added) == 1
+    assert mem.added[0][0] == "物品"
+    assert "FACTOR" in mem.added[0][1]
 
 
 def test_none_output_noop(tmp_path):
-    """NONE → 不写任何条目。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    llm = _make_llm(tmp_path, memory_store=store)
+    """NONE → 不调 add_fact。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
     llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("NONE")
     llm._extract_memory_sync("你好", "你好呀")
-    assert store.load() == ""
+    assert mem.added == []
 
 
 def test_extract_memory_async_runs_without_signal_word(tmp_path):
-    """extract_memory_async 每轮必做（不再看信号词），后台线程执行。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    llm = _make_llm(tmp_path, memory_store=store)
+    """extract_memory_async 每轮必做（不看信号词），后台线程执行。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
     llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("REMEMBER: identity: 英文名 Vange")
-    # 「随便聊聊」无信号词，但改造后 extract_memory_async 无条件触发
     llm.extract_memory_async("随便聊聊", "哈哈")
-    # 等待后台线程完成
     deadline = 2.0
-    import time
     t0 = time.time()
-    while time.time() - t0 < deadline and "Vange" not in store.load():
+    while time.time() - t0 < deadline and not mem.added:
         time.sleep(0.05)
-    assert "Vange" in store.load()
+    assert len(mem.added) == 1
 
 
 def test_remember_and_forget_combined(tmp_path):
-    """同一轮输出既有 REMEMBER 又有 FORGET：新增保留、遗忘删除。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    store.add_fact("possession", "单车是旧款")
-    llm = _make_llm(tmp_path, memory_store=store)
+    """同一轮既有 REMEMBER 又有 FORGET：新增 + 删除都调用。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
     llm.client.chat.completions.create = lambda **kw: _fake_extract_resp(
-        "REMEMBER: possession: 单车是捷安特\nFORGET: 旧款"
+        "REMEMBER: 物品: 单车是捷安特\nFORGET: 旧款"
     )
     llm._extract_memory_sync("我的单车换成捷安特了", "好的")
-    facts = store.get_facts()
-    assert any("捷安特" in f for f in facts)
-    assert not any("旧款" in f for f in facts)
+    assert len(mem.added) == 1
+    assert mem.removed == ["旧款"]
 
 
-# ---------------- 去重（方案B 关键词重叠度，Hermes 裁决） ----------------
+# ---------------- 注入（读）：load_recent ----------------
 
-def test_keyword_overlap_dedup_same_fact_different_wording(tmp_path):
-    """同一事实不同措辞，关键词高度重叠 → 判重只记 1 条。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    # 第一次：单车是 FACTOR OSTRO VAM
-    assert store.add_fact("物品", "单车是FACTOR OSTRO VAM", ["FACTOR", "OSTRO", "VAM", "单车"])
-    # 第二次：措辞不同，但关键词重叠 4/4
-    assert not store.add_fact("物品", "用户的自行车是FACTOR OSTRO VAM型号", ["FACTOR", "OSTRO", "VAM", "单车"])
-    assert len(store.get_facts()) == 1
-
-
-def test_keyword_overlap_dedup_partial_overlap(tmp_path):
-    """关键词部分重叠（≥3 个时阈值 0.6）→ 判重。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    store.add_fact("物品", "单车是FACTOR OSTRO VAM", ["FACTOR", "OSTRO", "VAM", "单车"])
-    # 关键词 3/4 重叠（FACTOR/OSTRO/VAM），阈值 0.6 → 判重
-    assert not store.add_fact("物品", "单车品牌FACTOR型号OSTRO VAM", ["FACTOR", "OSTRO", "VAM"])
-    assert len(store.get_facts()) == 1
+def test_system_prompt_injects_recent(tmp_path):
+    """_system_prompt 注入 USER.md 全文 + MEMORY.md 最近窗口（load_recent）。"""
+    mem = _MockMemoryClient(recent="用户的单车是FACTOR OSTRO VAM")
+    llm = _make_llm(tmp_path, memory=mem)
+    prompt = llm._system_prompt()
+    assert "用户喜欢骑车" in prompt          # USER.md 画像注入
+    assert "单车是FACTOR OSTRO VAM" in prompt  # MEMORY.md 最近窗口注入
 
 
-def test_different_facts_not_deduped(tmp_path):
-    """不同事实关键词不重叠 → 分别记录，不误杀。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    assert store.add_fact("物品", "单车是FACTOR OSTRO VAM", ["FACTOR", "OSTRO", "VAM", "单车"])
-    assert store.add_fact("学校", "广东医科大学", ["广东医科大学", "大学"])
-    assert len(store.get_facts()) == 2
+def test_system_prompt_empty_recent_ok(tmp_path):
+    """MEMORY.md 为空 → 静默跳过，不报错，仍注入 USER.md。"""
+    mem = _MockMemoryClient(recent="")
+    llm = _make_llm(tmp_path, memory=mem)
+    prompt = llm._system_prompt()
+    assert "用户喜欢骑车" in prompt
 
 
-def test_small_keyword_set_higher_threshold(tmp_path):
-    """关键词 <3 个时阈值 0.8：2 个关键词重叠 1 个（0.5 < 0.8）不判重；全重叠（1.0）判重。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    # 2 个关键词完全重叠 → 判重
-    assert store.add_fact("物品", "单车FACTOR", ["FACTOR", "单车"])
-    assert not store.add_fact("物品", "单车就是FACTOR", ["FACTOR", "单车"])
-    # 2 个关键词重叠 1 个（0.5 < 0.8）→ 不判重
-    assert store.add_fact("物品", "单车Giant", ["Giant", "单车"])
-    assert len(store.get_facts()) == 2
-
-
-def test_empty_keywords_fallback_substring(tmp_path):
-    """无关键词时退回子串匹配兜底。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    assert store.add_fact("物品", "单车是FACTOR", None)
-    # 无关键词的新条目，靠子串匹配判重（旧逻辑）
-    assert not store.add_fact("物品", "单车是FACTOR", None)
-    assert len(store.get_facts()) == 1
-
+# ---------------- 提取解析关键词 ----------------
 
 def test_extract_parses_keywords(tmp_path):
-    """提取层解析 REMEMBER ... ;; 关键词: 格式，把关键词传给 add_fact。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    llm = _make_llm(tmp_path, memory_store=store)
+    """提取层解析 REMEMBER ... ;; 关键词: 格式，关键词传给 add_fact。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
     llm.client.chat.completions.create = lambda **kw: _fake_extract_resp(
         "REMEMBER: 物品: 单车是FACTOR OSTRO VAM ;; 关键词: FACTOR, OSTRO, VAM, 单车"
     )
     llm._extract_memory_sync("我的单车是FACTOR OSTRO VAM", "好车")
-    facts = store.get_facts()
-    assert len(facts) == 1
-    assert "FACTOR" in facts[0] and "VAM" in facts[0]  # 关键词已写入四段格式
+    assert len(mem.added) == 1
+    cat, fact, kws = mem.added[0]
+    assert cat == "物品"
+    assert "FACTOR" in fact
+    assert kws == ["FACTOR", "OSTRO", "VAM", "单车"]
 
 
 def test_extract_legacy_no_keywords(tmp_path):
-    """提取层兼容旧格式（无关键词），仍能新增。"""
-    store = MemoryStore(tmp_path / "user_facts.md")
-    llm = _make_llm(tmp_path, memory_store=store)
+    """提取层兼容旧格式（无关键词），仍调 add_fact（keywords=None）。"""
+    mem = _MockMemoryClient()
+    llm = _make_llm(tmp_path, memory=mem)
     llm.client.chat.completions.create = lambda **kw: _fake_extract_resp("REMEMBER: 物品: 单车是FACTOR")
     llm._extract_memory_sync("我的单车是FACTOR", "好车")
-    assert "FACTOR" in store.load()
-
+    assert len(mem.added) == 1
+    assert mem.added[0][2] is None

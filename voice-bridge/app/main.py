@@ -29,7 +29,7 @@ from .config import load_config
 from .health import HealthDataStore
 from .knowledge import KnowledgeBase
 from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
-from .memory import MemoryStore
+from .memory import MemoryClient
 from .pipeline import FrameTooLargeError, NoSpeechError, StreamingPipeline, encode_frame
 from .router import Router
 from .schemas import HealthResponse, TTSHealth
@@ -81,10 +81,12 @@ async def startup():
     except LLMConfigError as e:
         llm_config_error = str(e)
         logger.error("LLM(Hermes) 配置失败: %s", e)
-    # 需求3：语音长期记忆（user_facts.md），供轻量通道提取 + 注入
-    memory_store = MemoryStore(cfg.memory_user_facts_path)
+    # 单一记忆源（v2）：MemoryClient——注入本地读 USER.md/MEMORY.md，写删走 memory_server HTTP
+    memory_client = MemoryClient(
+        cfg.memory_api_url, cfg.user_profile_path, cfg.memory_file_path, cfg.memory_inject_budget
+    )
     try:
-        lightweight_llm = create_lightweight_llm(cfg, memory_store=memory_store)  # 轻量通道 DeepSeek
+        lightweight_llm = create_lightweight_llm(cfg, memory_store=memory_client)  # 轻量通道 DeepSeek
     except LLMConfigError as e:
         logger.warning("轻量通道 DeepSeek 配置缺失: %s（轻量/知识库降级走慢路径）", e)
         lightweight_llm = None

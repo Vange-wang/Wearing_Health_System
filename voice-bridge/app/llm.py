@@ -254,7 +254,7 @@ class LightweightLLM(LLMBase):
         )
         self.model = model
         self.user_profile_path = user_profile_path
-        self.memory = memory_store  # 需求3：语音长期记忆（MemoryStore，可选）
+        self.memory = memory_store  # 单一记忆源：MemoryClient（可选）
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
         # ISSUE-0008：滑动窗口会话历史（多轮指代消解）。
         # 单会话（当前单 BOX-3 设备）；多设备时需按来源区分会话。
@@ -275,11 +275,11 @@ class LightweightLLM(LLMBase):
             + "\n\n以下是用户的长期画像与偏好（来自共享记忆），回复时自然贴合：\n"
             + profile
         )
-        # 需求3：追加语音对话中沉淀的长期记忆（user_facts.md；缺失/为空静默跳过）
+        # 单一记忆源（v2）：追加 Hermes MEMORY.md 最近窗口（本地读，零网络；缺失/为空静默跳过）
         if self.memory is not None:
-            facts = self.memory.load()
+            facts = self.memory.load_recent()
             if facts:
-                prompt += "\n\n以下是用户语音对话中透露的长期信息：\n" + facts
+                prompt += "\n\n以下是用户长期记忆（事实）：\n" + facts
         return prompt
 
     def _get_messages(self, user_text: str) -> list[dict]:
@@ -386,7 +386,7 @@ class LightweightLLM(LLMBase):
         ).start()
 
     def _extract_memory_sync(self, user_text: str, assistant_text: str) -> None:
-        """需求3：后台调 DeepSeek 提取本轮对话中的个人信息，写入/删除 user_facts.md。
+        """后台调 DeepSeek 提取本轮对话中的个人信息，写入/删除共享记忆（memory_server）。
 
         输出约定：
         - `NONE` 无信息；

@@ -76,9 +76,15 @@ class Config:
         self.rag_top_k = int(rag.get("top_k", 3))
         self.rag_score_threshold = float(rag.get("score_threshold", 0.0))
 
-        # 需求3：语音长期记忆（user_facts.md 路径）
+        # 单一记忆源（v2）：Hermes 记忆为唯一正本。
+        # 注入 = 本地读 USER.md（全文）+ MEMORY.md（最近部分）；写/删走 memory_server HTTP。
         memory = self._data.get("memory", {})
-        self.memory_user_facts_path = BASE_DIR / memory.get("user_facts_path", "memory/user_facts.md")
+        self.memory_api_url = memory.get("api_url", "http://127.0.0.1:8781/api/v1/memory")
+        self.memory_inject_budget = int(memory.get("inject_budget", 6144))  # 注入窗口字节预算（6KB）
+        # MEMORY.md 本地路径（与 USER.md 同目录，Hermes 侧唯一正本）
+        self.memory_file_path = Path(
+            memory.get("file_path", str(Path.home() / ".hermes" / "memories" / "MEMORY.md"))
+        ).expanduser()
 
         # 路由判定
         router = self._data.get("router", {})
