@@ -54,7 +54,7 @@
 
 ## 三、待办（zcode 侧）
 
-1. voice-bridge 改造（任务单 `zcode_handoff/2026-08-20-单一记忆源改造-任务单_hm.md`）；
+1. voice-bridge 改造（任务单 `zcode_tasks/2026-08-20-单一记忆源改造-任务单_hm.md`）；
 2. 对接后删除 `voice-bridge/memory/` 旧目录；
 3. 首字对比测试（改造前后 llm_ttft ≤ +50ms）→ 送 Hermes 审查。
 

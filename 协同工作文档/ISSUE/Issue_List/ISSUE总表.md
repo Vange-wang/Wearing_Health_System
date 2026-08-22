@@ -1,8 +1,8 @@
 # ISSUE 总表
 
-更新日期：2026-08-17
+更新日期：2026-08-21
 
-维护：Hermes（审查方）登记，WorkBuddy（开发员）执行，Vange 拍板。
+维护：Hermes（审查方）登记，zcode（开发员）执行，Vange 拍板。
 
 来源说明：本表记录可穿戴健康辅助系统项目的 Issue 编号、状态、优先级、责任方与关闭条件。Issue 编号稳定，不随状态变化复用或改号。状态流转：`open → closed`（满足关闭条件 + 证据可复读）或 `open → withdrawn`（明确不处理）。
 
@@ -20,6 +20,7 @@
 | `ISSUE-0010` | 会话级路由记忆（指代追问延续慢路径） | feature / routing | open | P2 | WorkBuddy / Hermes | 上轮慢路径→本轮指代追问延续慢路径 + 端到端验证真查 |
 | `ISSUE-0011` | TTS 情感表达换引擎立项 | future improvement | open | P3 | WorkBuddy / Hermes | 引擎选型评估（chat 风格/情感）立项，edge 免费端点不支持 express-as（实测） |
 | `ISSUE-0012` | 语义分级停顿（话题切换更长停顿） | feature | open | P3 | WorkBuddy / Hermes | 话题切换停顿 ≥0.5s 且普通句间不劣化；Spec 补条目 + 真机听感确认（句间连读修复 Spec §4 承诺的后续项，zcode 补登记） |
+| `ISSUE-0013` | 跨路径上下文联动断裂（"重新说一遍"丢上下文） | bug | open | P1 | zcode / Hermes | 慢路径后指代追问（重新说一遍/再说一遍）不丢上下文；新增路由用例 + 全量单测通过（真机 2026-08-21 复现，任务单 `zcode_tasks/2026-08-21-跨路径上下文联动-任务单_hm.md`） |
 
 ## Closed Issue
 

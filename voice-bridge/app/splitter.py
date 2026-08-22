@@ -23,6 +23,31 @@ _ENGLISH_PERIOD = "."
 # 可朗读字符：字母/数字/下划线 + 中日韩汉字（用于"纯标点跳过"判定）
 _SPEAKABLE = re.compile(r"[\w\u4e00-\u9fff]")
 
+# TTS 前清理：剥离 LLM 输出的 markdown/富文本标记，避免 TTS 念出"星号星号"等
+# 覆盖：**加粗** / *斜体* / `代码` / # 标题 / [链接](url) / > 引用 等
+_MD_BOLD_ITALIC = re.compile(r"\*{1,3}([^*\n]+?)\*{1,3}")   # **xx** / *xx* / ***xx***
+_MD_INLINE_CODE = re.compile(r"`([^`\n]+?)`")               # `xx`
+_MD_HEADING = re.compile(r"^#{1,6}\s*", re.MULTILINE)       # # 标题
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")             # [文字](url) → 文字
+_MD_QUOTE = re.compile(r"^>\s?", re.MULTILINE)              # > 引用
+_MD_LIST = re.compile(r"^[-*+]\s+", re.MULTILINE)           # - / * / + 列表
+_MD_ASTERISK_LEFT = re.compile(r"\*")                       # 残留孤立星号
+
+
+def clean_markdown(text: str) -> str:
+    """剥离 markdown 标记，保留正文（供 TTS/分句前调用）。"""
+    if not text:
+        return text
+    s = text
+    s = _MD_BOLD_ITALIC.sub(r"\1", s)      # **加粗** → 加粗
+    s = _MD_INLINE_CODE.sub(r"\1", s)      # `code` → code
+    s = _MD_LINK.sub(r"\1", s)             # [文字](url) → 文字
+    s = _MD_HEADING.sub("", s)             # # 标题 → 标题
+    s = _MD_QUOTE.sub("", s)               # > 引用 → 引用
+    s = _MD_LIST.sub("", s)                # - 列表 → 列表
+    s = _MD_ASTERISK_LEFT.sub("", s)       # 残留 *（防漏网）
+    return s.strip()
+
 
 class SentenceBuffer:
     """流式字符 → 完整句子列表。
@@ -42,6 +67,7 @@ class SentenceBuffer:
 
     def feed(self, text: str) -> list[str]:
         """喂入一段字符流，返回其中新产出的完整句子。"""
+        text = clean_markdown(text)  # 剥离 markdown 标记，防 TTS 念"星号星号"
         out: list[str] = []
         for ch in text:
             # 判定上一个 "."：后面是数字→小数点（不拆）；否则→句号（拆）
@@ -89,6 +115,7 @@ class SentenceBuffer:
             return []
         s = "".join(self._buf).strip()
         self._buf = []
+        s = clean_markdown(s)  # 句子组装完成后再清一次（覆盖跨 chunk 的 ** 标记）
         if not s or not _SPEAKABLE.search(s):
             return []  # 纯标点/空白跳过（Spec §6.2 空句子）
         logger.debug("sentence (%d chars): %s", len(s), s[:40])
