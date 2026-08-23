@@ -53,14 +53,25 @@ class HealthDataStore:
         self._last_push_ts: float | None = None
 
     def update(self, hr: float | None, spo2: float | None, seq: int | None = None) -> None:
-        """接收一帧数据（hr BPM / spo2 %，None 表示该字段无效）。"""
+        """接收一帧数据（hr BPM / spo2 %，None 表示该字段无效）。
+
+        逐字段合并（2026-08-23 修正）：None 字段保留上一有效值——BOX-3 上传
+        的 null 表示「该字段本帧无效」而非「清空」，直接覆盖会把上一秒有效的
+        血氧 99 擦成 None，导致语音查询「经常不回答血氧」。
+        时间戳始终刷新（HR 有效即数据新鲜）；阈值判定用合并后的值。
+        """
         now = time.monotonic()
         fire: tuple[float | None, float | None] | None = None
         with self._lock:
-            self._hr = hr
-            self._spo2 = spo2
+            if hr is not None:
+                self._hr = hr
+            if spo2 is not None:
+                self._spo2 = spo2
             self._seq = seq
-            self._ts = now
+            # 新鲜度：任一本帧字段有效即刷新（None 帧=无效帧，BOX-3 不上报，通常到不了这里）
+            if hr is not None or spo2 is not None:
+                self._ts = now
+            # 阈值判定用本帧传入值（P4 原语义）：合并后的陈旧值不参与，防旧假值持续触发
             if self._is_over(hr, spo2):
                 self._over_count += 1
             else:

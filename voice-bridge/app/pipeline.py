@@ -124,12 +124,15 @@ class StreamingPipeline:
         self._last_ack_idx["query"] = idx
         return pool[idx]
 
-    def _build_health_reply(self) -> str:
+    def _build_health_reply(self, text: str = "") -> str:
         """P3 DATA 模板直答（Spec §4.1）：根据最新健康数据构造回答，不经 LLM。
 
+        - 问血压（未接入）→ 诚实口径（防误报血氧值）；
         - 有新鲜数据 → 报数值 + 正常/偏高/偏低判断；
         - 无数据或超新鲜度阈值 → 答「检测暂时中断」（Spec §6 第 7 条）。
         """
+        if "血压" in text:
+            return "血压功能还没有接入，心率和血氧可以查看。"
         if self.health is None:
             return "健康数据功能正在准备中，接入后就能帮你看了。"
         hr, spo2, age = self.health.get_latest()
@@ -180,6 +183,9 @@ class StreamingPipeline:
 
     async def _stream_from_text(self, text: str):
         """text → 路由（轻量/RAG/Hermes）→ LLM 流 → 分句 → TTS → 长度前缀帧。"""
+        # ASR 近音词归一（血氧 → 血阳/学养/学样 同音误识别），路由前应用
+        if self.router is not None:
+            text = self.router.normalize_asr(text)
         # 路由判定 + RAG 检索（长期 RAG，Spec §3 A2 四步规则）
         rag_results: list[dict] = []
         if self.rag is not None:
@@ -190,7 +196,7 @@ class StreamingPipeline:
         if route == DATA:
             # P3 模板直答：不经 LLM，直接构造回答文本（确定性，防 LLM 读错数/编数，Spec §4.1）
             selected_llm = None
-            final_text = self._build_health_reply()
+            final_text = self._build_health_reply(text)
             self.timing["llm_backend"] = "template"
         elif route == HERMES:
             selected_llm = self.llm

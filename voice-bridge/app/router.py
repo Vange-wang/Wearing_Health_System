@@ -19,7 +19,7 @@ DATA = "data"
 ROUTE_TTL_SECONDS = 600
 
 # 指代/追问提示词：短句含这些词 → 视为上一轮的延续（而非全新话题）
-FOLLOWUP_HINTS = ["呢", "那", "它", "这", "也", "还有", "多少", "几度", "几点"]
+FOLLOWUP_HINTS = ["呢", "那", "它", "这", "也", "还有", "多少", "几度", "几点", "再"]
 
 # 新话题启动信号：短句含这些词 → 是全新话题，不延续上一轮
 # （覆盖常见动词 + 疑问结构；ASR 常丢"呢"等轻声词，故用反向信号兜底）
@@ -49,13 +49,25 @@ BROAD_QUERY_MIN_LEN = 5
 
 
 class Router:
-    def __init__(self, tool_keywords: list[str], skill_keywords: list[str], data_keywords: list[str] | None = None):
+    def __init__(self, tool_keywords: list[str], skill_keywords: list[str],
+                 data_keywords: list[str] | None = None,
+                 asr_normalize: dict[str, str] | None = None):
         self.tool_keywords = [k for k in tool_keywords if k]
         self.skill_keywords = [k for k in skill_keywords if k]
         self.data_keywords = [k for k in (data_keywords or []) if k]
+        # ASR 近音词归一（如 血阳/学养/学样 → 血氧），路由前应用
+        self.asr_normalize = {k: v for k, v in (asr_normalize or {}).items() if k}
         # ISSUE-0010：上一轮路由（会话级记忆；单设备够用，多设备需按来源区分）
         self._last_route: str | None = None
         self._last_route_ts: float = 0.0  # _last_route 设置时刻（monotonic），用于 TTL 过期
+
+    def normalize_asr(self, text: str) -> str:
+        """ASR 近音词归一（路由前调用）：血氧的同音误识别（血阳/学养/学样）归一为血氧。
+        血压语义不同，不在归一表内。"""
+        for wrong, right in self.asr_normalize.items():
+            if wrong in text:
+                text = text.replace(wrong, right)
+        return text
 
     def _set_last_route(self, route: str) -> None:
         self._last_route = route
@@ -89,6 +101,29 @@ class Router:
             logger.info("route=lightweight (polite: %s)", text)
             self._set_last_route(LIGHTWEIGHT)
             return LIGHTWEIGHT
+        # DATA 路由（BLE 立项 Spec §4.1 + 2026-08-23 路由顺序修正）：
+        # 心率/血氧核心词 → 健康数据模板直答。排在祈使词族（查一下/看一下）之前——
+        # 「帮我查一下血氧」意图是查数据而非搜索；排在 RAG 前防截胡。
+        for kw in self.data_keywords:
+            if kw and kw in text:
+                logger.info("route=data (health data keyword: %s)", kw)
+                self._set_last_route(DATA)
+                return DATA
+        if rag_hit:
+            logger.info("route=rag")
+            self._set_last_route(RAG)
+            return RAG
+        # 指代追问延续（ISSUE-0010 + 2026-08-23 DATA 延续）：排在工具词之前——
+        # 「你再看一下」含工具词「看一下」，但意图是延续上轮数据查询；
+        # HERMES 延续与工具词命中目的地相同，前置无副作用。RAG 保持在其前
+        # （知识查询优先于追问延续，test_t2_router 约束）。
+        if not self._route_memory_expired() and self._is_followup(text):
+            if self._last_route == HERMES:
+                logger.info("route=hermes (会话记忆：指代追问延续慢路径)")
+                return HERMES
+            if self._last_route == DATA:
+                logger.info("route=data (会话记忆：指代追问延续数据查询)")
+                return DATA
         for kw in self.skill_keywords:
             if kw and kw in text:
                 logger.info("route=hermes (skill keyword: %s)", kw)
@@ -105,20 +140,6 @@ class Router:
                 logger.info("route=hermes (tool keyword: %s)", kw)
                 self._set_last_route(HERMES)
                 return HERMES
-        # DATA 路由（BLE 立项 Spec §4.1）：心率/血氧核心词 → 健康数据模板直答，排在 RAG 之前防截胡
-        for kw in self.data_keywords:
-            if kw and kw in text:
-                logger.info("route=data (health data keyword: %s)", kw)
-                self._set_last_route(DATA)
-                return DATA
-        if rag_hit:
-            logger.info("route=rag")
-            self._set_last_route(RAG)
-            return RAG
-        # ISSUE-0010：上轮慢路径（未过 TTL）+ 本轮指代追问 → 延续慢路径
-        if self._last_route == HERMES and not self._route_memory_expired() and self._is_followup(text):
-            logger.info("route=hermes (会话记忆：指代追问延续慢路径)")
-            return HERMES
         self._set_last_route(LIGHTWEIGHT)
         logger.info("route=lightweight")
         return LIGHTWEIGHT

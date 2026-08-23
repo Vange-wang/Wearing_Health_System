@@ -94,6 +94,8 @@ class Config:
         self.router_skill_keywords = [str(k) for k in router.get("skill_keywords", [])]
         # BLE 健康数据路由（P3 DATA）：心率/血氧核心词 → 模板直答，排在 RAG 前
         self.router_data_keywords = [str(k) for k in router.get("data_keywords", ["心率", "血氧"])]
+        # ASR 近音词归一（P3 修：血氧 → 血阳/学养/学样 同音误识别；血压不归一语义不同）
+        self.router_asr_normalize = {str(k): str(v) for k, v in router.get("asr_normalize", {}).items()}
 
         # BLE 健康监测（立项 Spec §5/§6）：阈值预警 + 数据新鲜度
         health = self._data.get("health", {})

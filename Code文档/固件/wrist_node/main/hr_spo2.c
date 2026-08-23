@@ -22,6 +22,21 @@ static double s_refract_s = 0.30;
 #define REFRACT_RR_FRAC  0.5
 /* 低峰数判定：静息信号（AC/DC < 1.2%，运动期 AC/DC 达 1.5-5% 不误判） */
 #define QUIET_AC_RATIO   0.012
+/* 切迹抑制窗口（秒）：近距离双峰保留更高者——重搏切迹矮于主峰，运动伪影
+ * 第二峰可能更高（同样被保留）。窗口自适应 0.55×上一RR（锁定后随心率收缩，
+ * 高心率不设墙），未锁定默认 0.45s（放置期即可滤切迹，冷启动首锁落在真实心率）。 */
+static double s_notch_win_s = 0.45;
+#define NOTCH_WIN_DEFAULT 0.45
+#define NOTCH_WIN_RR_FRAC 0.55
+#define NOTCH_WIN_MIN     0.30
+#define NOTCH_WIN_MAX     0.50
+/* 噪声底扣除（SpO2 用）：弱脉动时红通道噪声底淹没真实 AC → R 虚高假低。
+   取最近 N 窗口的 AC 最小值作噪声底估计（运动窗口 AC 巨大不影响最小值）。 */
+#define AC_FLOOR_WIN 12
+static double s_ir_ac_hist[AC_FLOOR_WIN];
+static double s_red_ac_hist[AC_FLOOR_WIN];
+static int s_ac_hist_n = 0;
+static int s_ac_hist_i = 0;
 /* 峰高阈值系数（相对 AC 幅度，2026-08-23 微动修复）：过滤运动伪影小伪峰 */
 #define PEAK_THR_AC       0.7
 /* qcd 有效性门限（四分位离散度，实测标定：静置 0.18-0.53 / 运动 0.56-1.68） */
@@ -41,6 +56,10 @@ static uint16_t s_last_ok_bpm = 0;
 static int s_cold_agree = 0;
 /* 低峰数逃生计数（不应期放宽用） */
 static int s_low_peaks = 0;
+/* 分歧共识（2026-08-23）：连续合格窗口互相一致但与锁定值差异大 → 强制重锁，
+   堵错误锁定自维持（128 假锁后真实 73 被变化率门限长期阻挡） */
+static uint16_t s_dissent_bpm = 0;
+static int s_dissent_agree = 0;
 /* 冷启动：连续 3 个合格窗口且相互一致（±20 bpm）才锁定。
  * 2026-08-23 实测：放置瞬态的节律性动作可维持 10-15s，2 窗口一致性会被骗过
  * （147→163 假锁定），3 窗口（~15s 静置）显著提高锁假门槛。 */
@@ -142,21 +161,49 @@ hr_spo2_result_t hr_spo2_compute(void)
         s_hr_hist_n = 0;
         s_last_ok_bpm = 0;
         s_cold_agree = 0;
+        s_dissent_bpm = 0;
+        s_dissent_agree = 0;
+        s_notch_win_s = NOTCH_WIN_DEFAULT;   /* 无手指重置切迹窗口 */
         ESP_LOGW("hr_spo2", "RAW n=%d irDC=%d irAC=%d redDC=%d redAC=%d（手指未检测到）",
                  n, (int)mean_ir, (int)ac_ir, (int)mean_red, (int)ac_red);
         return r;   /* 全无效 */
     }
 
-    /* ---- SpO2：R 比率（MAXREFDES117 二次拟合） ---- */
-    double ratio_ir = ac_ir / mean_ir;
-    double ratio_red = ac_red / mean_red;
+    /* ---- SpO2：R 比率（MAXREFDES117 二次拟合），AC 先扣噪声底 ---- */
+    /* 噪声底 = 最近 AC_FLOOR_WIN 窗口的 AC 最小值（仅手指在位时更新） */
+    if (s_ac_hist_n < AC_FLOOR_WIN) {
+        s_ir_ac_hist[s_ac_hist_i] = ac_ir;
+        s_red_ac_hist[s_ac_hist_i] = ac_red;
+        s_ac_hist_i++;
+        s_ac_hist_n++;
+    } else {
+        s_ir_ac_hist[s_ac_hist_i] = ac_ir;
+        s_red_ac_hist[s_ac_hist_i] = ac_red;
+        s_ac_hist_i = (s_ac_hist_i + 1) % AC_FLOOR_WIN;
+    }
+    double floor_ir = 1e9, floor_red = 1e9;
+    for (int i = 0; i < s_ac_hist_n; i++) {
+        if (s_ir_ac_hist[i] < floor_ir) floor_ir = s_ir_ac_hist[i];
+        if (s_red_ac_hist[i] < floor_red) floor_red = s_red_ac_hist[i];
+    }
+    double ac_ir_c = ac_ir - floor_ir;
+    double ac_red_c = ac_red - floor_red;
+    if (ac_ir_c < 0) ac_ir_c = 0;
+    if (ac_red_c < 0) ac_red_c = 0;
+
+    double ratio_ir = ac_ir_c / mean_ir;
+    double ratio_red = ac_red_c / mean_red;
     ESP_LOGI("hr_spo2", "RAW n=%d irDC=%d irAC=%d redDC=%d redAC=%d R=%.2f rate=%.0fHz",
              n, (int)mean_ir, (int)ac_ir, (int)mean_red, (int)ac_red,
              (ratio_ir > 0.0005) ? (ratio_red / ratio_ir) : -1.0, rate);
     int spo2_valid = 0;
-    if (ratio_ir > 0.0005 && ratio_red > 0.0005) {
+    if (ratio_ir > 0.001 && ratio_red > 0.001) {
         double R = ratio_red / ratio_ir;
-        if (R >= 0.4 && R <= 3.0) {
+        /* R 比率上限 1.2（2026-08-23 修正）：健康人 R∈[0.4,1.0]；R>1.2 对应
+           SpO2<85，静息时出现即接触伪影（实测假低 76 由此混入）。MAXREFDES117
+           拟合本身只标定 90-100 区间，1.2 封顶牺牲 <85 的极端低值报告，
+           换取消除日常假低误报。 */
+        if (R >= 0.4 && R <= 1.2) {
             double spo2 = -45.060 * R * R + 30.354 * R + 94.845;
             if (spo2 < 0) spo2 = 0;
             if (spo2 > 100) spo2 = 100;
@@ -174,16 +221,30 @@ hr_spo2_result_t hr_spo2_compute(void)
 
     static uint32_t peaks[64];
     int npeaks = 0;
-    int last_peak = -min_dist * 2;
+    int last_peak_idx = -1000;
+    int notch_dist = (int)(rate * s_notch_win_s);
     for (int i = 1; i < n - 1; i++) {
         if (smooth[i] > thr &&
             smooth[i] >= smooth[i - 1] &&
             smooth[i] > smooth[i + 1]) {
-            if (i - last_peak >= min_dist) {
-                peaks[npeaks] = (uint32_t)i;
-                if (npeaks < 63) npeaks++;
-                last_peak = i;
+            int gap = i - last_peak_idx;
+            if (gap >= min_dist) {
+                if (gap < notch_dist && npeaks > 0 &&
+                    smooth[i] > smooth[last_peak_idx]) {
+                    /* 切迹抑制：近距双峰保留更高者（前一峰是切迹 → 替换） */
+                    peaks[npeaks - 1] = (uint32_t)i;
+                    last_peak_idx = i;
+                } else if (gap >= notch_dist || smooth[i] <= smooth[last_peak_idx]) {
+                    if (gap < notch_dist) {
+                        /* 近距矮峰 = 切迹，丢弃 */
+                    } else {
+                        peaks[npeaks] = (uint32_t)i;
+                        if (npeaks < 63) npeaks++;
+                        last_peak_idx = i;
+                    }
+                }
             }
+            /* gap < min_dist：不应期，丢弃 */
         }
     }
 
@@ -262,8 +323,31 @@ hr_spo2_result_t hr_spo2_compute(void)
     if (hr_ok && s_last_stable_hr > 0) {
         uint16_t diff = (bpm > s_last_stable_hr) ? (bpm - s_last_stable_hr)
                                                  : (s_last_stable_hr - bpm);
-        if ((double)diff > HR_CHANGE_FRAC * (double)s_last_stable_hr && qcd > QCD_STRICT) {
-            hr_ok = false;
+        if ((double)diff > HR_CHANGE_FRAC * (double)s_last_stable_hr) {
+            /* 大跳变：默认拒绝（运动伪影）；但连续 3 个合格窗口互相一致
+               （分歧共识）→ 强制重锁——堵错误锁定自维持（128 假锁后真实
+               73 长期被挡；qcd≤0.10 极规整单窗口仍可直接接受） */
+            if (s_dissent_bpm > 0) {
+                uint16_t dd = (bpm > s_dissent_bpm) ? (bpm - s_dissent_bpm)
+                                                    : (s_dissent_bpm - bpm);
+                if (dd <= COLD_AGREE_BPM) {
+                    s_dissent_agree++;
+                } else {
+                    s_dissent_agree = 0;
+                }
+            }
+            s_dissent_bpm = bpm;
+            if (qcd <= QCD_STRICT || s_dissent_agree >= 2) {
+                hr_ok = true;
+                s_dissent_agree = 0;
+                s_hr_hist_n = 0;   /* 重锁：清平滑历史，防旧值污染中位数 */
+                ESP_LOGW("hr_spo2", "分歧共识重锁 bpm=%u", bpm);
+            } else {
+                hr_ok = false;
+            }
+        } else {
+            s_dissent_agree = 0;
+            s_dissent_bpm = 0;
         }
     }
     if (hr_ok && s_last_stable_hr == 0) {
@@ -311,6 +395,11 @@ hr_spo2_result_t hr_spo2_compute(void)
         if (new_refract > REFRACT_MAX_S) new_refract = REFRACT_MAX_S;
         if (new_refract < REFRACT_BASE_S) new_refract = REFRACT_BASE_S;
         s_refract_s = new_refract;
+        /* 切迹抑制窗口同源自适应：0.55×上一RR，钳位 [0.30, 0.50] */
+        double nw = NOTCH_WIN_RR_FRAC * rr;
+        if (nw > NOTCH_WIN_MAX) nw = NOTCH_WIN_MAX;
+        if (nw < NOTCH_WIN_MIN) nw = NOTCH_WIN_MIN;
+        s_notch_win_s = nw;
     }
 
     /* ---- flags ---- */
@@ -327,9 +416,10 @@ hr_spo2_result_t hr_spo2_compute(void)
             r.confidence = (uint8_t)conf;
         }
     }
-    if (spo2_valid && hr_ok) {
-        /* SpO2 依赖双通道脉搏波形质量，运动期 R 比率失真（实测 80-87 假低），
-           与 HR 同门控，防止血氧假低误触预警 */
+    if (spo2_valid && npeaks >= 4 && qcd <= QCD_VALID_MAX) {
+        /* SpO2 门控（2026-08-23 修正）：按单窗口信号质量判定，不依赖 HR 锁定——
+         * 冷启动期/HR 未锁定但信号干净时 SpO2 也应上报（此前与 hr_ok 绑定，
+         * 导致 HR 未锁定时问血氧无回答）；运动期 qcd 超限同样拦截（R 比率失真假低） */
         flags |= 0x02;
     }
     if (conf < 60) {

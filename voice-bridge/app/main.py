@@ -123,6 +123,7 @@ async def startup():
         tool_keywords=cfg.router_tool_keywords,
         skill_keywords=cfg.router_skill_keywords,
         data_keywords=cfg.router_data_keywords,
+        asr_normalize=cfg.router_asr_normalize,
     )
     # BLE 健康数据缓存（P3 骨架）：接收 BOX-3 上报 + 阈值预警判定
     # P4：微信预警推送（update() 内触发，不依赖 BOX-3 轮询）

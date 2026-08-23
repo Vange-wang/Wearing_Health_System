@@ -33,7 +33,12 @@ memory:
 router:
   tool_keywords: [查快递, 写文件, 发邮件, 定时, 搜网页, 搜索, 查天气, 帮我查, 天气, 新闻, 快递, 股票, 股价, 路况, 彩票, 汇率, 查一下, 查查, 查下, 看一下, 看看, 看下, 找一下, 找找, 找下, 怎么样, 的情况, 如何, 好不好, 是什么, 了解下, 介绍下]
   skill_keywords: []
-  data_keywords: [心率, 血氧]
+  data_keywords: [心率, 血氧, 血压]
+  # ASR 近音词归一（血氧同音误识别 → 归一后 DATA 路由命中；血压语义不同不归一）
+  asr_normalize:
+    血阳: 血氧
+    学养: 血氧
+    学样: 血氧
 pipeline:
   sentence_max_chars: 50
   max_frame_bytes: 8388608
@@ -50,7 +55,7 @@ health:
   night_end: 6
   alert_consecutive: 3
   alert_cooldown_s: 600
-  data_stale_seconds: 300
+  data_stale_seconds: 120
   # P4 微信预警推送：接收方为子女/监护人微信（hermes send -t weixin:<chat_id>）
   wechat_chat_id: o9cq803xoWnMDS1napPGMzBmd3vs@im.wechat
   wechat_push_enabled: true
