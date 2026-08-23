@@ -10,8 +10,30 @@
 #define WINDOW_SIZE    1024
 /* 无手指判据：IR 直流分量低于此值（18-bit ADC） */
 #define DC_MIN_VALID   8000
-/* 峰最小间距（秒）：0.3s → 心率上限 200 BPM，按实测速率换算成样本数 */
-#define PEAK_MIN_DIST_SEC 0.3
+/* 峰最小间距（秒）：0.45s → 心率上限 133 BPM（老人健康监测场景足够）。
+ * 2026-08-23 微动修复实测：0.3s 时 6mA 高信噪比下重搏切迹（主峰后 300-400ms 次峰）
+ * 被检出为独立心跳，HR 在真实值与 2 倍值之间二选一跳变（65 vs 172 均"规整"）。
+ * 0.45s 将切迹滤除，同时运动伪影高频分量一并抑制。 */
+#define PEAK_MIN_DIST_SEC 0.45
+/* 峰高阈值系数（相对 AC 幅度，2026-08-23 微动修复）：过滤运动伪影小伪峰 */
+#define PEAK_THR_AC       0.7
+/* qcd 有效性门限（四分位离散度，实测标定：静置 0.18-0.53 / 运动 0.56-1.68） */
+#define QCD_VALID_MAX     0.50
+/* 变化率门限：相对上一稳定值跳变超 30% 需 qcd≤0.10（极规整）才接受 */
+#define HR_CHANGE_FRAC    0.30
+#define QCD_STRICT        0.10
+/* 输出平滑：最近 3 个有效 BPM 取中位数 */
+#define HR_SMOOTH_N       3
+
+/* 上一稳定 HR（文件级：无手指时重置，运动期维持上报） */
+static uint16_t s_last_stable_hr = 0;
+static uint16_t s_hr_hist[HR_SMOOTH_N];
+static int s_hr_hist_n = 0;
+/* 冷启动一致性：上一合格窗口 bpm + 连续一致计数（防手指刚放的节律性运动伪影被锁定） */
+static uint16_t s_last_ok_bpm = 0;
+static int s_cold_agree = 0;
+/* 冷启动：连续 2 个合格窗口且相互一致（±20 bpm）才锁定 */
+#define COLD_AGREE_BPM  20
 
 typedef struct {
     uint32_t ir[WINDOW_SIZE];
@@ -105,6 +127,10 @@ hr_spo2_result_t hr_spo2_compute(void)
 
     /* 手指在否 */
     if (mean_ir < DC_MIN_VALID) {
+        s_last_stable_hr = 0;   /* 无手指：清上一稳定值，防隔久复戴报旧值 */
+        s_hr_hist_n = 0;
+        s_last_ok_bpm = 0;
+        s_cold_agree = 0;
         ESP_LOGW("hr_spo2", "RAW n=%d irDC=%d irAC=%d redDC=%d redAC=%d（手指未检测到）",
                  n, (int)mean_ir, (int)ac_ir, (int)mean_red, (int)ac_red);
         return r;   /* 全无效 */
@@ -132,7 +158,8 @@ hr_spo2_result_t hr_spo2_compute(void)
     for (int i = 2; i < n - 2; i++) {
         smooth[i] = ((double)ir[i - 2] + ir[i - 1] + ir[i] + ir[i + 1] + ir[i + 2]) / 5.0;
     }
-    double thr = mean_ir + 0.5 * ac_ir;
+    /* 峰高阈值（相对 AC）：低于此高度的局部极大判为微动伪峰 */
+    double thr = mean_ir + PEAK_THR_AC * ac_ir;
 
     static uint32_t peaks[64];
     int npeaks = 0;
@@ -151,6 +178,7 @@ hr_spo2_result_t hr_spo2_compute(void)
 
     uint16_t bpm = 0;
     double cv = 1.0;   /* 峰间期变异系数（默认差） */
+    double qcd = 1.0;  /* 四分位离散度（对孤立野点鲁棒） */
     if (npeaks >= 2) {
         static uint32_t intervals[64];
         int nin = npeaks - 1;
@@ -161,6 +189,9 @@ hr_spo2_result_t hr_spo2_compute(void)
         uint32_t median = intervals[nin / 2];
         if (median > 0) {
             bpm = (uint16_t)(60.0 * rate / median + 0.5);   /* 按实测速率换算 BPM */
+        }
+        if (nin >= 3 && median > 0) {
+            qcd = (double)(intervals[(3 * nin) / 4] - intervals[nin / 4]) / (double)median;
         }
         /* 离散度 */
         double m = 0;
@@ -188,18 +219,84 @@ hr_spo2_result_t hr_spo2_compute(void)
     if (conf > 100) conf = 100;
     r.confidence = (uint8_t)conf;
 
+    /* ---- HR 有效性判定（2026-08-23 微动修复，阈值由实测诊断数据标定）----
+     * 三重门限：
+     *   1. qcd（四分位离散度）≤ 0.45：静置帧实测 0.18-0.38，运动帧 0.56-1.68，判别力最强；
+     *   2. 变化率门限：相对上一稳定值跳变 >30% 且 qcd>0.10 → 判运动伪影
+     *      （堵节律规整的运动伪影，实测漏网案例：qcd=0.19 的 bpm=140 假跳）；
+     *   3. 输出中位数平滑（3 帧）+ 运动期维持上一稳定值 + 置伪影位（flags bit2）。 */
+    bool hr_ok = (npeaks >= 4 && bpm >= 30 && bpm <= 220 && qcd <= QCD_VALID_MAX);
+    if (hr_ok && s_last_stable_hr > 0) {
+        uint16_t diff = (bpm > s_last_stable_hr) ? (bpm - s_last_stable_hr)
+                                                 : (s_last_stable_hr - bpm);
+        if ((double)diff > HR_CHANGE_FRAC * (double)s_last_stable_hr && qcd > QCD_STRICT) {
+            hr_ok = false;
+        }
+    }
+    if (hr_ok && s_last_stable_hr == 0) {
+        /* 冷启动：连续 2 个合格窗口且相互一致（±15 bpm）才锁定，
+           防手指刚放上时节律规整的运动伪影（实测 qcd=0.12 的 bpm=188 假锁定） */
+        if (s_last_ok_bpm > 0) {
+            uint16_t diff = (bpm > s_last_ok_bpm) ? (bpm - s_last_ok_bpm)
+                                                  : (s_last_ok_bpm - bpm);
+            if (diff <= COLD_AGREE_BPM) {
+                s_cold_agree++;
+            } else {
+                s_cold_agree = 0;
+            }
+        }
+        s_last_ok_bpm = bpm;
+        if (s_cold_agree < 1) {
+            hr_ok = false;
+        }
+    }
+    uint16_t hr_out = 0;
+    if (hr_ok) {
+        /* 输出平滑：最近 3 个有效 BPM 中位数（防单帧抖动） */
+        s_hr_hist[s_hr_hist_n % HR_SMOOTH_N] = bpm;
+        s_hr_hist_n++;
+        if (s_hr_hist_n >= HR_SMOOTH_N) {
+            uint16_t t[HR_SMOOTH_N];
+            for (int i = 0; i < HR_SMOOTH_N; i++) {
+                t[i] = s_hr_hist[i];
+            }
+            for (int i = 0; i < HR_SMOOTH_N - 1; i++) {
+                for (int j = i + 1; j < HR_SMOOTH_N; j++) {
+                    if (t[j] < t[i]) {
+                        uint16_t tmp = t[i]; t[i] = t[j]; t[j] = tmp;
+                    }
+                }
+            }
+            hr_out = t[HR_SMOOTH_N / 2];
+        } else {
+            hr_out = bpm;   /* 平滑窗口未满，先直接报 */
+        }
+        s_last_stable_hr = hr_out;
+    }
+
     /* ---- flags ---- */
     uint8_t flags = 0;
-    if (npeaks >= 4 && bpm >= 30 && bpm <= 220) {
+    if (hr_ok) {
         flags |= 0x01;
-        r.heart_rate = bpm;
+        r.heart_rate = hr_out;
+    } else if (s_last_stable_hr > 0) {
+        /* 运动伪影期（含 npeaks=0 的剧烈运动）：维持上一稳定值，标记伪影位 */
+        flags |= 0x01 | 0x04;
+        r.heart_rate = s_last_stable_hr;
+        if (conf > 40) {
+            conf = 40;
+            r.confidence = (uint8_t)conf;
+        }
     }
-    if (spo2_valid) {
+    if (spo2_valid && hr_ok) {
+        /* SpO2 依赖双通道脉搏波形质量，运动期 R 比率失真（实测 80-87 假低），
+           与 HR 同门控，防止血氧假低误触预警 */
         flags |= 0x02;
     }
     if (conf < 60) {
         flags |= 0x04;   /* 运动伪影/低置信 */
     }
+    ESP_LOGW("diag", "npeaks=%d bpm=%u cv=%.2f qcd=%.2f hr_ok=%d", npeaks, bpm, cv, qcd, hr_ok);
     r.flags = flags;
     return r;
 }

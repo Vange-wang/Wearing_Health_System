@@ -34,8 +34,11 @@ static const char *TAG = "max30102";
 
 #define EXPECTED_PART_ID  0x15
 
-/* LED 电流（0.2mA/步）：0x0F=3mA。拆掉保护盖后光路强，7.2mA 会让 IR 饱和削顶 */
-#define LED_CURRENT       0x0F
+/* LED 电流（0.2mA/步）：0x17=4.6mA（2026-08-23 微动修复最终值）。
+ * 实测对比：3mA irAC~250（信噪比不足）；6mA irAC~1300 但重搏切迹过强，
+ * 0.45s 峰间距仍漏 0.5-0.6s 次峰 → HR 高估（104-120 vs 真实 78）。
+ * 4.6mA irAC~500：SNR 足够且切迹弱，锁定值与血氧仪吻合（63-82）。 */
+#define LED_CURRENT       0x17
 
 /* 连续失败超过该次数（≈1 秒）判定总线卡死，触发恢复 */
 #define I2C_FAIL_RECOVER  100
@@ -271,7 +274,8 @@ esp_err_t max30102_init(void)
     }
 
     s_consec_fails = 0;
-    ESP_LOGI(TAG, "初始化完成 PartID=0x%02x（软件I2C/100Hz/215µs/3mA）", s_part_id);
+    ESP_LOGI(TAG, "初始化完成 PartID=0x%02x（软件I2C/100Hz/215µs/%.1fmA）",
+             s_part_id, (float)LED_CURRENT * 0.2f);
     return ESP_OK;
 }
 
