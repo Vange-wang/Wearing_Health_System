@@ -1,8 +1,8 @@
-# BOX-3 语音终端固件（voice_agent + BLE central，P2）
+# BOX-3 语音终端固件（voice_agent + BLE central，P2/P3）
 
 ## 概述
 
-ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-bridge 流式 ASR/TTS）+ **P2 BLE central**（连接腕部节点 WH-Wrist01，接收综合帧并缓存，供 P3 语音查询）。
+ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-bridge 流式 ASR/TTS）+ **P2 BLE central**（连接腕部节点 WH-Wrist01，接收综合帧并缓存）+ **P3 数据上报**（有效帧 POST 到 voice-bridge `/api/v1/health/data`，供 DATA 路由模板直答）。
 
 ## 硬件与烧录
 
@@ -13,17 +13,22 @@ ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-b
 | 构建目录 | `build_v1/` |
 | 按键 | Boot（GPIO0）：按住说话 / **双击触发 BLE 首次扫描**；顶部 MUTE（GPIO1）暂未用 |
 
-## 软件架构（本次 P2 新增）
+## 软件架构（本次 P2/P3 新增）
 
 - `main/ble_central.c/h` — **BLE central（P2 新增）**：
   - 扫描匹配：名字前缀 `WH-` + 厂商段 0xFFFF 能力位 bit0/bit1（与 P1 `ble_periph.c` 契约对齐）
   - 连接 → 服务发现（`7a0b1000-…`）→ 特征发现（`7a0b1001-…`）→ CCCD 订阅 notify
   - 8 字节帧解析缓存（seq 丢帧检测 / HR-uint16LE / SpO2 / conf / flags / battery），临界区保护，供语音任务查询
   - NVS 存对端 MAC → **开机直连** + 断线后台重连（指数退避 2s~30s，独立任务，不阻塞语音）
+- **P3 数据上报（`ble_central.c` 内 upload_task）**：
+  - 有效帧（flags bit0/bit1 任一置位）触发上报：`POST http://voicebridge.local:8710/api/v1/health/data`，JSON `{"hr":N,"spo2":N,"seq":N}`，**无效字段传 null**（服务端 Pydantic 可空）
+  - **关键规则**：无手指帧（flags=0x00）**不上报**——服务端 `update()` 会刷新新鲜度时间戳，若连无效帧都传，摘指后「暂时中断」永远不会触发
+  - 失败静默：重试 1 次（间隔 2s），连续失败仅首条/每 12 条打一条 WARN；首次成功与恢复打 INFO
+  - 独立 `ble_upload` 任务（信号量由 cache_frame 驱动），**不进语音首字路径**（红线满足）
 - `main/voice_agent.c` — v0.4 语音链路 + P2 集成：
   - Boot 双击（BUTTON_DOUBLE_CLICK）触发首次扫描；双击窗口放宽至 500ms（`CONFIG_BUTTON_SHORT_PRESS_TIME_MS=500`，默认 180ms 人手速不够）
   - **300ms 按住守卫**：按住不足 300ms 视为单击/双击手势，不发起对话（防双击触发扫描时产生空 HTTP 请求）
-  - BLE central 初始化在 app_main 尾部（NimBLE 主机任务 + ble_reconn 任务，均独立于语音首字路径）
+  - BLE central 初始化在 app_main 尾部（NimBLE 主机任务 + ble_reconn/ble_upload 任务，均独立于语音首字路径）
 
 ## 关键配置（sdkconfig.defaults 新增）
 
@@ -59,4 +64,4 @@ CONFIG_BUTTON_SHORT_PRESS_TIME_MS=500
 
 - 归档日期：2026-08-23 · 归档人：zcode
 - 源目录：`D:\esp-box\examples\voice_agent\`
-- 对应任务单：`协同工作文档/zcode_tasks/2026-08-23-P2-BOX3-BLEcentral-任务单_hm.md`
+- 对应任务单：`协同工作文档/zcode_tasks/2026-08-23-P2-BOX3-BLEcentral-任务单_hm.md`、`2026-08-23-P3-数据流与语音查询-任务单_hm.md`

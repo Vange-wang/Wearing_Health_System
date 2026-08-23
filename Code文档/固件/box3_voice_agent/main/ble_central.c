@@ -1,14 +1,15 @@
 /*
  * SPDX-License-Identifier: CC0-1.0
  *
- * ble_central — P2 BOX-3 BLE central（zcode, 2026-08-23）
+ * ble_central — P2/P3 BOX-3 BLE central（zcode, 2026-08-23）
  *
- * 功能（任务单 2026-08-23-P2-BOX3-BLEcentral）：
+ * 功能（任务单 2026-08-23-P2/P3-BOX3-BLEcentral）：
  *   1. 扫描匹配腕部节点 WH-Wrist01（名字前缀 WH- + 厂商段 0xFFFF 能力位 bit0/bit1）
  *   2. 连接 → 服务发现（combo 0x7a0b1000…）→ 订阅综合帧特征 notify（0x7a0b1001…）
  *   3. 8 字节帧解析缓存（seq 丢帧检测 / HR-uint16LE / SpO2 / conf / flags / battery）
  *   4. NVS 存对端 MAC → 开机直连 + 断线后台重连（指数退避，不阻塞语音任务）
- * 首字红线：本模块全部在 NimBLE 主机任务 / 独立重连任务，不进入语音首字路径。
+ *   5. P3：有效帧经 HTTP POST 上报 voice-bridge /api/v1/health/data（独立后台任务）
+ * 首字红线：本模块全部在 NimBLE 主机任务 / 独立重连 / 独立上报任务，不进入语音首字路径。
  *
  * API 注意（IDF v5.2.7 内置 NimBLE）：
  *   - GATT 客户端发现用独立回调（ble_gatt_disc_svc_fn / chr_fn / dsc_fn），
@@ -18,6 +19,7 @@
  */
 #include "ble_central.h"
 #include <string.h>
+#include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -30,6 +32,10 @@
 #include "nimble/nimble_port_freertos.h"
 
 static const char *TAG = "ble_central";
+
+/* ---- P3 上报（任务单 2026-08-23-P3）：与 HEALTH_URL 同域，mDNS 由 voice_agent 初始化 ---- */
+#define HEALTH_DATA_URL "http://voicebridge.local:8710/api/v1/health/data"
+#define UPLOAD_RETRY_MS 2000   /* 失败重试 1 次间隔 */
 
 /* ---- 目标匹配（与 P1 ble_periph.c 对齐，改动需两端同步） ---- */
 #define TARGET_NAME_PREFIX "WH-"
@@ -88,6 +94,8 @@ static ble_health_t s_health = { 0 };
 
 /* 重连触发信号量：开机直连 / 断线 / 连接失败时 give */
 static SemaphoreHandle_t s_reconnect_sem = NULL;
+/* 上报触发信号量：cache_frame 收到有效帧时 give，上传任务消费 */
+static SemaphoreHandle_t s_upload_sem = NULL;
 
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
 static int disc_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
@@ -147,6 +155,12 @@ static void cache_frame(const uint8_t frame[8])
     ESP_LOGI(TAG, "帧 seq=%u HR=%u SpO2=%u conf=%u flags=0x%02x bat=%u lost=%lu",
              h.seq, h.hr, h.spo2, h.conf, h.flags, h.battery,
              (unsigned long)h.lost);
+
+    /* P3：仅 HR/SpO2 任一有效才触发上报。无手指帧（flags=0x00）不上报——
+     * 服务端 update 会刷新新鲜度时间戳，若连无手指帧都传，「暂时中断」永远不会触发。 */
+    if (s_upload_sem && (h.flags & 0x03) != 0) {
+        xSemaphoreGive(s_upload_sem);
+    }
 }
 
 /* ---------------- GATT 客户端回调（独立于 GAP 事件） ---------------- */
@@ -372,6 +386,82 @@ static void reconnect_task(void *arg)
     }
 }
 
+/* ---------------- P3 上报任务（独立后台，不阻塞 BLE 收帧/语音） ---------------- */
+
+static bool http_post_health(const ble_health_t *h)
+{
+    /* 无效字段传 null（服务端 Pydantic 可空；None 不覆盖值） */
+    char body[96];
+    if ((h->flags & 0x01) && (h->flags & 0x02)) {
+        snprintf(body, sizeof(body), "{\"hr\":%u,\"spo2\":%u,\"seq\":%u}",
+                 h->hr, h->spo2, h->seq);
+    } else if (h->flags & 0x01) {
+        snprintf(body, sizeof(body), "{\"hr\":%u,\"spo2\":null,\"seq\":%u}",
+                 h->hr, h->seq);
+    } else {
+        snprintf(body, sizeof(body), "{\"hr\":null,\"spo2\":%u,\"seq\":%u}",
+                 h->spo2, h->seq);
+    }
+
+    esp_http_client_config_t cfg = {
+        .url = HEALTH_DATA_URL,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 5000,
+        .buffer_size = 512,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        return false;
+    }
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+
+    bool ok = false;
+    int wlen = (int)strlen(body);
+    if (esp_http_client_open(client, wlen) == ESP_OK &&
+        esp_http_client_write(client, body, wlen) >= 0 &&
+        esp_http_client_fetch_headers(client) >= 0 &&
+        esp_http_client_get_status_code(client) == 200) {
+        ok = true;
+    }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return ok;
+}
+
+static void upload_task(void *arg)
+{
+    (void)arg;
+    int fail_streak = 0;
+    bool first_upload_done = false;
+    while (1) {
+        xSemaphoreTake(s_upload_sem, portMAX_DELAY);
+        ble_health_t h;
+        if (!ble_central_get_data(&h) || (h.flags & 0x03) == 0) {
+            continue;
+        }
+        bool ok = false;
+        for (int attempt = 0; attempt < 2 && !ok; attempt++) {   /* 首次 + 重试 1 次 */
+            ok = http_post_health(&h);
+            if (!ok && attempt == 0) {
+                vTaskDelay(pdMS_TO_TICKS(UPLOAD_RETRY_MS));
+            }
+        }
+        if (ok) {
+            if (fail_streak > 0 || !first_upload_done) {
+                ESP_LOGI(TAG, "上报成功 hr=%u spo2=%u seq=%u", h.hr, h.spo2, h.seq);
+                first_upload_done = true;
+            }
+            fail_streak = 0;
+        } else {
+            fail_streak++;
+            /* 静默降噪：仅首次失败与每 12 次连续失败打一条 */
+            if (fail_streak == 1 || fail_streak % 12 == 0) {
+                ESP_LOGW(TAG, "上报失败（连续 %d 次，网络/服务端未就绪？）", fail_streak);
+            }
+        }
+    }
+}
+
 /* ---------------- NimBLE host ---------------- */
 static void on_sync(void)
 {
@@ -407,6 +497,10 @@ esp_err_t ble_central_init(void)
     if (!s_reconnect_sem) {
         return ESP_ERR_NO_MEM;
     }
+    s_upload_sem = xSemaphoreCreateBinary();
+    if (!s_upload_sem) {
+        return ESP_ERR_NO_MEM;
+    }
 
     ble_hs_cfg.reset_cb = NULL;
     ble_hs_cfg.sync_cb = on_sync;
@@ -416,6 +510,7 @@ esp_err_t ble_central_init(void)
     nimble_port_init();
 
     xTaskCreate(reconnect_task, "ble_reconn", 4096, NULL, 4, NULL);
+    xTaskCreate(upload_task, "ble_upload", 4096, NULL, 4, NULL);
 
     nimble_port_freertos_init(nimble_host_task);
     ESP_LOGI(TAG, "BLE central 就绪（目标 WH-* / 能力位 0x%02x）", TARGET_MFG_CAPS);
