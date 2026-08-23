@@ -27,7 +27,7 @@
 
 ## 编译烧录
 
-按 `Code文档/ESP32固件-编译烧录配方.md`（必胜版）：IDF v5.2.7 环境 + 全新 build 目录 + COM5。依赖 BSP：esp-box-3 锁 1.2.0~2。emoji PNG 用 Segoe UI Emoji 字体生成（个人毕设演示用途，开源/商用需换 Noto/Twemoji）。
+按 `Code文档/技术笔记/ESP32固件-编译烧录配方.md`（必胜版）：IDF v5.2.7 环境 + 全新 build 目录 + COM5。依赖 BSP：esp-box-3 锁 1.2.0~2。emoji PNG 用 Segoe UI Emoji 字体生成（个人毕设演示用途，开源/商用需换 Noto/Twemoji）。
 
 ## 纪律
 

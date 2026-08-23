@@ -104,4 +104,4 @@ venv\Scripts\python -m pytest tests/ -v        # v0.2 回归 + v0.3 套件
 - ASR：sherpa-onnx + SenseVoice（批式）+ **zipformer 流式**（v0.4 A2，真机 `/voice/stream` 用）；VAD：能量门限（静音拦截 → 400 no_speech）
 - LLM：**Hermes API Server**（慢路径）+ **DeepSeek 轻量通道**（纯闲聊/知识库，注入 USER.md）；三层路由（技能/工具→Hermes，知识库→RAG，其余→轻量）
 - TTS：**edge-tts 7.2.8 唯一**（v0.4 A5 弃 piper）：合成 24k mp3 → miniaudio 解码重采样 16k → WAV；edge 故障报 502（不兜底）；句间 300ms 停顿 + 小数点消歧（A6）
-- Spec：`../规划文档/Spec文档/2026-08-16-语音桥-spec-v0.4.md`；自测报告：`../Code文档/v0.4自测报告.md`
+- Spec：`../规划文档/Spec文档/2026-08-16-语音桥-spec-v0.4.md`；自测报告：`../Code文档/自测报告/v0.4自测报告.md`
