@@ -10,11 +10,18 @@
 #define WINDOW_SIZE    1024
 /* 无手指判据：IR 直流分量低于此值（18-bit ADC） */
 #define DC_MIN_VALID   8000
-/* 峰最小间距（秒）：0.45s → 心率上限 133 BPM（老人健康监测场景足够）。
- * 2026-08-23 微动修复实测：0.3s 时 6mA 高信噪比下重搏切迹（主峰后 300-400ms 次峰）
- * 被检出为独立心跳，HR 在真实值与 2 倍值之间二选一跳变（65 vs 172 均"规整"）。
- * 0.45s 将切迹滤除，同时运动伪影高频分量一并抑制。 */
-#define PEAK_MIN_DIST_SEC 0.45
+/* 峰最小间距（不应期，自适应，2026-08-23 微动修复）：
+ * - 基准 0.30s（心率上限 200 BPM，不设低上限）
+ * - 锁定稳定 HR 后拉长到 0.5×上一RR、封顶 0.45s（静息期滤除重搏切迹：
+ *   6mA 下切迹 300-400ms 次峰曾致 HR 二选一跳变 65vs172）
+ * - 连续低峰数逃生：静息信号下峰数持续低于预期一半 → 放宽 0.30s 重新冷启动
+ *   （真实心率快速上升时不应期会挡死新节律，必须能自我解锁） */
+static double s_refract_s = 0.30;
+#define REFRACT_BASE_S   0.30
+#define REFRACT_MAX_S    0.45
+#define REFRACT_RR_FRAC  0.5
+/* 低峰数判定：静息信号（AC/DC < 1.2%，运动期 AC/DC 达 1.5-5% 不误判） */
+#define QUIET_AC_RATIO   0.012
 /* 峰高阈值系数（相对 AC 幅度，2026-08-23 微动修复）：过滤运动伪影小伪峰 */
 #define PEAK_THR_AC       0.7
 /* qcd 有效性门限（四分位离散度，实测标定：静置 0.18-0.53 / 运动 0.56-1.68） */
@@ -32,7 +39,11 @@ static int s_hr_hist_n = 0;
 /* 冷启动一致性：上一合格窗口 bpm + 连续一致计数（防手指刚放的节律性运动伪影被锁定） */
 static uint16_t s_last_ok_bpm = 0;
 static int s_cold_agree = 0;
-/* 冷启动：连续 2 个合格窗口且相互一致（±20 bpm）才锁定 */
+/* 低峰数逃生计数（不应期放宽用） */
+static int s_low_peaks = 0;
+/* 冷启动：连续 3 个合格窗口且相互一致（±20 bpm）才锁定。
+ * 2026-08-23 实测：放置瞬态的节律性动作可维持 10-15s，2 窗口一致性会被骗过
+ * （147→163 假锁定），3 窗口（~15s 静置）显著提高锁假门槛。 */
 #define COLD_AGREE_BPM  20
 
 typedef struct {
@@ -100,7 +111,7 @@ hr_spo2_result_t hr_spo2_compute(void)
             rate = 100.0;
         }
     }
-    int min_dist = (int)(rate * PEAK_MIN_DIST_SEC);
+    int min_dist = (int)(rate * s_refract_s);
     if (min_dist < 5) min_dist = 5;
     if (min_dist > 300) min_dist = 300;
 
@@ -176,6 +187,28 @@ hr_spo2_result_t hr_spo2_compute(void)
         }
     }
 
+    /* 低峰数逃生：静息信号（AC/DC < 1.2%）下峰数持续显著低于预期 →
+     * 不应期可能挡死了真实心率上升，放宽并重新冷启动（不丢失运动期维持值） */
+    {
+        double ac_ratio = ac_ir / mean_ir;
+        double win_sec = (double)n / rate;
+        double expect = win_sec * (s_last_stable_hr > 0 ? (double)s_last_stable_hr : 70.0) / 60.0;
+        if (ac_ratio < QUIET_AC_RATIO && expect > 0 && npeaks < expect * 0.5) {
+            s_low_peaks++;
+        } else {
+            s_low_peaks = 0;
+        }
+        if (s_low_peaks >= 2) {
+            s_refract_s = REFRACT_BASE_S;
+            s_last_stable_hr = 0;
+            s_hr_hist_n = 0;
+            s_last_ok_bpm = 0;
+            s_cold_agree = 0;
+            s_low_peaks = 0;
+            ESP_LOGW("hr_spo2", "不应期放宽（连续低峰数，可能心率已上升）");
+        }
+    }
+
     uint16_t bpm = 0;
     double cv = 1.0;   /* 峰间期变异系数（默认差） */
     double qcd = 1.0;  /* 四分位离散度（对孤立野点鲁棒） */
@@ -246,7 +279,7 @@ hr_spo2_result_t hr_spo2_compute(void)
             }
         }
         s_last_ok_bpm = bpm;
-        if (s_cold_agree < 1) {
+        if (s_cold_agree < 2) {
             hr_ok = false;
         }
     }
@@ -272,6 +305,12 @@ hr_spo2_result_t hr_spo2_compute(void)
             hr_out = bpm;   /* 平滑窗口未满，先直接报 */
         }
         s_last_stable_hr = hr_out;
+        /* 自适应不应期：0.5×上一RR，封顶 0.45s、下限 0.30s（下一窗口生效） */
+        double rr = 60.0 / (double)hr_out;
+        double new_refract = REFRACT_RR_FRAC * rr;
+        if (new_refract > REFRACT_MAX_S) new_refract = REFRACT_MAX_S;
+        if (new_refract < REFRACT_BASE_S) new_refract = REFRACT_BASE_S;
+        s_refract_s = new_refract;
     }
 
     /* ---- flags ---- */
