@@ -106,6 +106,10 @@ class Config:
         self.health_alert_consecutive = int(health.get("alert_consecutive", 3))
         self.health_alert_cooldown_s = float(health.get("alert_cooldown_s", 600))
         self.health_data_stale_seconds = float(health.get("data_stale_seconds", 300))
+        # P4 微信预警推送（Spec §5.3/§5.4）
+        self.health_wechat_chat_id = str(health.get("wechat_chat_id", ""))
+        self.health_wechat_daily_limit = int(health.get("wechat_daily_limit", 5))
+        self.health_wechat_push_enabled = bool(health.get("wechat_push_enabled", True))
 
         self.log_level = self._data.get("log", {}).get("level", "INFO")
 

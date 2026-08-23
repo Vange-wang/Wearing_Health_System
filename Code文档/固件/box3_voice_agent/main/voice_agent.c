@@ -46,6 +46,7 @@ static const char *TAG = "voice_agent";
 /* ---- 可配置项（按现场改） ---- */
 #define SERVER_URL   "http://voicebridge.local:8710/api/v1/voice/stream"
 #define HEALTH_URL   "http://voicebridge.local:8710/api/v1/health"
+#define ALERT_URL    "http://voicebridge.local:8710/api/v1/health/alert"   /* P4：空闲轮询预警播报 */
 #define TALK_BUTTON  BSP_BUTTON_CONFIG   /* Boot 键（GPIO0）：按住说话（顶部键 GPIO1 为静音，复位用硬件 Reset 键） */
 
 /* ---- 屏幕 emoji 状态显示（需求1 替代状态灯，Spec 2026-08-20 §1.3） ---- */
@@ -89,6 +90,8 @@ static esp_codec_dev_handle_t s_mic = NULL;
 static esp_codec_dev_handle_t s_spk = NULL;
 static volatile bool s_recording = false;
 static volatile bool s_cancel = false;      /* 打断当前播放（按键按下时置位） */
+static volatile bool s_talk_active = false; /* P4：对话进行中（录音+播放全程），预警播报不抢占 */
+static volatile bool s_alert_playing = false; /* P4：预警播报进行中，对话等待其让位 */
 
 /* 静态 scratch 缓冲（单线程任务内，避免栈溢出） */
 static int16_t s_stereo[CHUNK_BYTES / 2];   /* 录音立体声分块 */
@@ -501,15 +504,93 @@ static void talk_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
+        /* P4：预警播报进行中则等待让位（按键按下已置 s_cancel，播报会立即退出） */
+        while (s_alert_playing) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
         s_cancel = false;   /* 清除打断标志，开始新对话 */
+        s_talk_active = true;
         ESP_LOGI(TAG, ">> TALK START");
         voice_round();
+        s_talk_active = false;
         ESP_LOGI(TAG, "<< TALK DONE");
         if (!s_recording) {
             /* 正常结束：松开后防抖 */
             vTaskDelay(pdMS_TO_TICKS(200));
         }
         /* 若被打断（s_recording 仍 true，用户还按着），立即循环开始新录音，不丢语音 */
+    }
+}
+
+/* ---------------- P4 预警空闲轮询（Spec 方案 A：不打断对话，30s/次） ---------------- */
+#define ALERT_POLL_INTERVAL_MS 30000
+
+/* 单次轮询：200 → 逐帧播放（长度前缀 WAV，复用语音帧协议）；204/网络失败 → 静默返回 */
+static void alert_poll_once(void)
+{
+    esp_http_client_config_t cfg = {
+        .url = ALERT_URL,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 5000,
+        .buffer_size = 1024,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        return;
+    }
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        esp_http_client_cleanup(client);
+        return;
+    }
+    if (esp_http_client_fetch_headers(client) < 0) {
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return;
+    }
+    int status = esp_http_client_get_status_code(client);
+    if (status == 200) {
+        ESP_LOGI(TAG, "ALERT 有预警，开始播报");
+        s_alert_playing = true;
+        uint8_t hdr[4];
+        int frames = 0;
+        while (read_exact(client, hdr, 4)) {
+            uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
+                           ((uint32_t)hdr[2] << 8) | (uint32_t)hdr[3];
+            if (len == 0 || len > MAX_FRAME) {
+                ESP_LOGE(TAG, "ALERT bad frame len=%u", (unsigned)len);
+                break;
+            }
+            uint8_t *wav = malloc(len);
+            if (!wav) {
+                break;
+            }
+            if (!read_exact(client, wav, (int)len)) {
+                free(wav);
+                break;
+            }
+            bool done = play_wav(wav, (int)len);
+            free(wav);
+            frames++;
+            if (!done) {
+                break;   /* 按键打断 */
+            }
+        }
+        s_alert_playing = false;
+        ESP_LOGI(TAG, "ALERT PLAY DONE frames=%d", frames);
+    }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+}
+
+/* 空闲轮询任务：WiFi 可用且无对话进行中才轮询；播报可被按键打断 */
+static void alert_poll_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        if (s_wifi_up && !s_recording && !s_talk_active && !s_alert_playing) {
+            alert_poll_once();
+        }
+        vTaskDelay(pdMS_TO_TICKS(ALERT_POLL_INTERVAL_MS));
     }
 }
 
@@ -725,4 +806,7 @@ void app_main(void)
 
     /* 对话任务：独立任务跑 talk_task，播放可被按键打断（app_main 主任务返回） */
     xTaskCreate(talk_task, "talk", 8192, NULL, 5, NULL);
+
+    /* P4：预警空闲轮询任务（30s/次，不打断对话，独立于语音首字路径） */
+    xTaskCreate(alert_poll_task, "alert_poll", 4096, NULL, 4, NULL);
 }

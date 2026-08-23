@@ -1,8 +1,8 @@
-# BOX-3 语音终端固件（voice_agent + BLE central，P2/P3）
+# BOX-3 语音终端固件（voice_agent + BLE central，P2/P3/P4）
 
 ## 概述
 
-ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-bridge 流式 ASR/TTS）+ **P2 BLE central**（连接腕部节点 WH-Wrist01，接收综合帧并缓存）+ **P3 数据上报**（有效帧 POST 到 voice-bridge `/api/v1/health/data`，供 DATA 路由模板直答）。
+ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-bridge 流式 ASR/TTS）+ **P2 BLE central**（连接腕部节点 WH-Wrist01，接收综合帧并缓存）+ **P3 数据上报**（有效帧 POST `/api/v1/health/data`）+ **P4 预警空闲轮询播报**（30s/次 GET `/api/v1/health/alert`，不打断对话）。
 
 ## 硬件与烧录
 
@@ -25,6 +25,10 @@ ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-b
   - **关键规则**：无手指帧（flags=0x00）**不上报**——服务端 `update()` 会刷新新鲜度时间戳，若连无效帧都传，摘指后「暂时中断」永远不会触发
   - 失败静默：重试 1 次（间隔 2s），连续失败仅首条/每 12 条打一条 WARN；首次成功与恢复打 INFO
   - 独立 `ble_upload` 任务（信号量由 cache_frame 驱动），**不进语音首字路径**（红线满足）
+- **P4 预警空闲轮询播报（`voice_agent.c` alert_poll_task）**：
+  - 每 30s（Spec 30~60s）GET `http://voicebridge.local:8710/api/v1/health/alert`，仅当 `s_wifi_up && !s_recording && !s_talk_active` 才轮询——**不打断对话**
+  - 200 → 逐帧解析（长度前缀 WAV，复用语音帧协议）→ play_wav 播放（可被按键打断，`s_cancel` 机制复用）
+  - 204/网络失败 → 静默继续；任务优先级 4，独立于语音首字路径
 - `main/voice_agent.c` — v0.4 语音链路 + P2 集成：
   - Boot 双击（BUTTON_DOUBLE_CLICK）触发首次扫描；双击窗口放宽至 500ms（`CONFIG_BUTTON_SHORT_PRESS_TIME_MS=500`，默认 180ms 人手速不够）
   - **300ms 按住守卫**：按住不足 300ms 视为单击/双击手势，不发起对话（防双击触发扫描时产生空 HTTP 请求）

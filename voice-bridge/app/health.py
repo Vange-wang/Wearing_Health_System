@@ -2,13 +2,15 @@
 
 - P3 骨架：数据接收缓存 + 新鲜度判断（供 DATA 路由模板直答）。
 - P4 预警：连续 N 次超阈值 + 冷却（供 /health/alert 轮询）。
-- 微信日上限在三路推送层（main.py）做，本模块只负责「是否触发预警」。
+- P4 微信推送：连续次数恰好达到阈值的瞬间触发 alert_cb（不依赖 BOX-3 轮询，
+  任务单 2026-08-23-P4 任务 A 要求）；日上限在推送层（wechat_alert.py）做。
 
 单 BOX-3 设备场景：内存缓存即可（多设备时需按来源分桶）。
 """
 import logging
 import threading
 import time
+from typing import Callable
 
 logger = logging.getLogger("voice-bridge.health")
 
@@ -26,6 +28,7 @@ class HealthDataStore:
         night_end: int = 6,
         alert_consecutive: int = 3,
         alert_cooldown_s: float = 600,
+        alert_cb: Callable[[float | None, float | None], None] | None = None,
     ):
         self.hr_high = hr_high
         self.hr_low = hr_low
@@ -35,6 +38,7 @@ class HealthDataStore:
         self.night_end = night_end
         self.alert_consecutive = alert_consecutive
         self.alert_cooldown_s = alert_cooldown_s
+        self._alert_cb = alert_cb   # 预警触发回调（微信推送），锁外调用
 
         self._lock = threading.Lock()
         self._hr: float | None = None
@@ -45,10 +49,13 @@ class HealthDataStore:
         # 预警状态：连续超阈值计数 + 上次触发时刻
         self._over_count = 0
         self._last_alert_ts: float | None = None
+        # 推送冷却（与轮询冷却同源，独立时间戳防 BOX-3 轮询消费影响推送）
+        self._last_push_ts: float | None = None
 
     def update(self, hr: float | None, spo2: float | None, seq: int | None = None) -> None:
         """接收一帧数据（hr BPM / spo2 %，None 表示该字段无效）。"""
         now = time.monotonic()
+        fire: tuple[float | None, float | None] | None = None
         with self._lock:
             self._hr = hr
             self._spo2 = spo2
@@ -58,7 +65,19 @@ class HealthDataStore:
                 self._over_count += 1
             else:
                 self._over_count = 0
+            # 微信推送触发（任务单 P4 任务 A）：连续次数恰好跨过阈值 + 冷却期外，
+            # 触发瞬间推一次。不消费 _over_count（留给 poll_alert 轮询播报）。
+            if (self._alert_cb is not None and
+                    self._over_count == self.alert_consecutive and
+                    (self._last_push_ts is None or now - self._last_push_ts >= self.alert_cooldown_s)):
+                self._last_push_ts = now
+                fire = (self._hr, self._spo2)
         logger.debug("health update hr=%s spo2=%s seq=%s over_count=%d", hr, spo2, seq, self._over_count)
+        if fire is not None:
+            try:
+                self._alert_cb(fire[0], fire[1])
+            except Exception:
+                logger.exception("预警推送回调异常")
 
     def get_latest(self) -> tuple[float | None, float | None, float | None]:
         """返回 (hr, spo2, age_seconds)。无数据返回 (None, None, None)。"""

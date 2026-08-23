@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from .asr import ASRModelLoadError, create_asr, create_streaming_asr, read_wav_16k_mono
 from .config import load_config
 from .health import HealthDataStore
+from .wechat_alert import WechatAlertPusher
 from .knowledge import KnowledgeBase
 from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
 from .memory import MemoryClient
@@ -124,6 +125,13 @@ async def startup():
         data_keywords=cfg.router_data_keywords,
     )
     # BLE 健康数据缓存（P3 骨架）：接收 BOX-3 上报 + 阈值预警判定
+    # P4：微信预警推送（update() 内触发，不依赖 BOX-3 轮询）
+    wechat_pusher = WechatAlertPusher(
+        chat_id=cfg.health_wechat_chat_id,
+        daily_limit=cfg.health_wechat_daily_limit,
+        state_file=str(Path(__file__).resolve().parent.parent / "logs" / "wechat_push_state.json"),
+        enabled=cfg.health_wechat_push_enabled,
+    )
     health_store = HealthDataStore(
         hr_high=cfg.health_hr_high,
         hr_low=cfg.health_hr_low,
@@ -133,6 +141,7 @@ async def startup():
         night_end=cfg.health_night_end,
         alert_consecutive=cfg.health_alert_consecutive,
         alert_cooldown_s=cfg.health_alert_cooldown_s,
+        alert_cb=wechat_pusher.push,
     )
 
     # 慢路径安抚语预合成（query 池，随机轮换）。快路径 ack 已删除（首字延迟达标）。
