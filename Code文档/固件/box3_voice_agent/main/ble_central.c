@@ -1,0 +1,460 @@
+/*
+ * SPDX-License-Identifier: CC0-1.0
+ *
+ * ble_central — P2 BOX-3 BLE central（zcode, 2026-08-23）
+ *
+ * 功能（任务单 2026-08-23-P2-BOX3-BLEcentral）：
+ *   1. 扫描匹配腕部节点 WH-Wrist01（名字前缀 WH- + 厂商段 0xFFFF 能力位 bit0/bit1）
+ *   2. 连接 → 服务发现（combo 0x7a0b1000…）→ 订阅综合帧特征 notify（0x7a0b1001…）
+ *   3. 8 字节帧解析缓存（seq 丢帧检测 / HR-uint16LE / SpO2 / conf / flags / battery）
+ *   4. NVS 存对端 MAC → 开机直连 + 断线后台重连（指数退避，不阻塞语音任务）
+ * 首字红线：本模块全部在 NimBLE 主机任务 / 独立重连任务，不进入语音首字路径。
+ *
+ * API 注意（IDF v5.2.7 内置 NimBLE）：
+ *   - GATT 客户端发现用独立回调（ble_gatt_disc_svc_fn / chr_fn / dsc_fn），
+ *     完成标志 error->status == BLE_HS_EDONE；不是 GAP 事件
+ *   - ble_gap_disc 需 struct ble_gap_disc_params（filter_policy 用 BLE_HCI_SCAN_FILT_NO_WL）
+ *   - notify 接收事件为 BLE_GAP_EVENT_NOTIFY_RX
+ */
+#include "ble_central.h"
+#include <string.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "host/ble_hs.h"
+#include "host/ble_gap.h"
+#include "host/ble_gatt.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+
+static const char *TAG = "ble_central";
+
+/* ---- 目标匹配（与 P1 ble_periph.c 对齐，改动需两端同步） ---- */
+#define TARGET_NAME_PREFIX "WH-"
+#define TARGET_MFG_COMPANY  0xFFFF   /* mfg_data[0:1] LE */
+#define TARGET_MFG_CAPS     0x03     /* mfg_data[2]: bit0 心率 bit1 血氧 */
+
+static const ble_uuid128_t svc_combo_uuid = BLE_UUID128_INIT(
+    0x0b, 0x9a, 0x8f, 0x7e, 0x6d, 0x5c, 0x3b, 0x9a,
+    0x2f, 0x4e, 0x1d, 0x8c, 0x00, 0x10, 0x0b, 0x7a);   /* 7a0b1000-… */
+static const ble_uuid128_t chr_combo_uuid = BLE_UUID128_INIT(
+    0x0b, 0x9a, 0x8f, 0x7e, 0x6d, 0x5c, 0x3b, 0x9a,
+    0x2f, 0x4e, 0x1d, 0x8c, 0x01, 0x10, 0x0b, 0x7a);   /* 7a0b1001-… */
+static const ble_uuid16_t  dsc_cccd_uuid  = BLE_UUID16_INIT(0x2902);
+
+/* ---- 连接参数（任务单契约：100~200ms 间隔 / latency 4 / 超时 4s） ---- */
+static const struct ble_gap_conn_params s_conn_params = {
+    .scan_itvl = 0x0010,
+    .scan_window = 0x0010,
+    .itvl_min = 80,                /* 100ms */
+    .itvl_max = 160,               /* 200ms */
+    .latency = 4,
+    .supervision_timeout = 400,    /* 4s */
+    .min_ce_len = 0,
+    .max_ce_len = 0,
+};
+
+/* ---- 扫描参数 ---- */
+#define SCAN_DURATION_MS 10000
+static const struct ble_gap_disc_params s_disc_params = {
+    .itvl = 0x0010,                    /* 10ms */
+    .window = 0x0010,
+    .filter_policy = BLE_HCI_SCAN_FILT_NO_WL,
+    .limited = 0,
+    .passive = 0,
+    .filter_duplicates = 0,
+    .disable_observer_mode = 0,
+};
+
+/* ---- NVS ---- */
+#define NVS_NS      "ble_cfg"
+#define NVS_KEY_MAC "peer_mac"
+
+/* ---- 状态 ---- */
+static volatile bool s_connected = false;
+static volatile bool s_scanning = false;
+static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static uint16_t s_combo_val_handle = 0;
+static uint16_t s_combo_cccd_handle = 0;
+
+static uint8_t s_peer_mac[6];
+static bool s_peer_mac_valid = false;
+
+/* 缓存（临界区保护，语音任务可随时读） */
+static portMUX_TYPE s_cache_mux = portMUX_INITIALIZER_UNLOCKED;
+static ble_health_t s_health = { 0 };
+
+/* 重连触发信号量：开机直连 / 断线 / 连接失败时 give */
+static SemaphoreHandle_t s_reconnect_sem = NULL;
+
+static int gap_event_cb(struct ble_gap_event *event, void *arg);
+static int disc_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                       const struct ble_gatt_chr *chr, void *arg);
+
+/* ---------------- NVS ---------------- */
+static void nvs_store_mac(const uint8_t mac[6])
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_blob(h, NVS_KEY_MAC, mac, 6);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "对端 MAC 已存 NVS %02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static bool nvs_load_mac(uint8_t mac[6])
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return false;
+    }
+    size_t len = 6;
+    bool ok = (nvs_get_blob(h, NVS_KEY_MAC, mac, &len) == ESP_OK && len == 6);
+    nvs_close(h);
+    return ok;
+}
+
+/* ---------------- 帧解析缓存 ---------------- */
+static void cache_frame(const uint8_t frame[8])
+{
+    ble_health_t h;
+    h.seq = frame[0];
+    h.flags = frame[1];
+    h.hr = (uint16_t)frame[2] | ((uint16_t)frame[3] << 8);
+    h.spo2 = frame[4];
+    h.conf = frame[5];
+    h.battery = frame[6];
+    h.ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    portENTER_CRITICAL(&s_cache_mux);
+    if (s_health.valid) {
+        /* 丢帧检测：seq 递增（8-bit 回绕），差值 >1 计丢帧 */
+        uint8_t diff = (uint8_t)(h.seq - s_health.seq);
+        if (diff > 1) {
+            s_health.lost += (uint32_t)(diff - 1);
+        }
+    }
+    h.lost = s_health.lost;
+    h.valid = true;
+    s_health = h;
+    portEXIT_CRITICAL(&s_cache_mux);
+
+    ESP_LOGI(TAG, "帧 seq=%u HR=%u SpO2=%u conf=%u flags=0x%02x bat=%u lost=%lu",
+             h.seq, h.hr, h.spo2, h.conf, h.flags, h.battery,
+             (unsigned long)h.lost);
+}
+
+/* ---------------- GATT 客户端回调（独立于 GAP 事件） ---------------- */
+
+/* 特征发现完成 → 找到 CCCD 并订阅 notify */
+static int disc_dsc_cb(uint16_t conn_handle,
+                       const struct ble_gatt_error *error,
+                       uint16_t chr_val_handle,
+                       const struct ble_gatt_dsc *dsc, void *arg)
+{
+    (void)chr_val_handle;
+    (void)arg;
+    if (error->status == 0 && dsc != NULL &&
+        ble_uuid_cmp(&dsc->uuid.u, &dsc_cccd_uuid.u) == 0) {
+        s_combo_cccd_handle = dsc->handle;
+        uint8_t cccd_val = 1;   /* notify 使能 */
+        int rc = ble_gattc_write_flat(conn_handle, dsc->handle,
+                                      &cccd_val, 1, NULL, NULL);
+        ESP_LOGI(TAG, "订阅 notify cccd=0x%04x rc=%d", dsc->handle, rc);
+    } else if (error->status == BLE_HS_EDONE && s_combo_cccd_handle == 0) {
+        ESP_LOGW(TAG, "未找到 CCCD（val_handle=0x%04x）", s_combo_val_handle);
+    }
+    return 0;
+}
+
+/* 服务发现完成 → 发起特征发现 */
+static int disc_svc_cb(uint16_t conn_handle,
+                       const struct ble_gatt_error *error,
+                       const struct ble_gatt_svc *service, void *arg)
+{
+    (void)arg;
+    if (error->status == 0 && service != NULL &&
+        ble_uuid_cmp(&service->uuid.u, &svc_combo_uuid.u) == 0) {
+        ESP_LOGI(TAG, "找到综合帧服务 start=0x%04x end=0x%04x",
+                 service->start_handle, service->end_handle);
+        int rc = ble_gattc_disc_chrs_by_uuid(conn_handle,
+                                             service->start_handle,
+                                             service->end_handle,
+                                             &chr_combo_uuid.u,
+                                             disc_chr_cb, NULL);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "特征发现发起失败 rc=%d", rc);
+        }
+    }
+    return 0;
+}
+
+/* 特征发现完成 → 记录 val_handle → 发现 CCCD 描述符 */
+static int disc_chr_cb(uint16_t conn_handle,
+                       const struct ble_gatt_error *error,
+                       const struct ble_gatt_chr *chr, void *arg)
+{
+    (void)arg;
+    if (error->status == 0 && chr != NULL &&
+        ble_uuid_cmp(&chr->uuid.u, &chr_combo_uuid.u) == 0) {
+        s_combo_val_handle = chr->val_handle;
+        ESP_LOGI(TAG, "找到综合帧特征 val_handle=0x%04x", s_combo_val_handle);
+        int rc = ble_gattc_disc_all_dscs(conn_handle, chr->val_handle,
+                                         chr->val_handle + 1,
+                                         disc_dsc_cb, NULL);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "描述符发现发起失败 rc=%d", rc);
+        }
+    }
+    return 0;
+}
+
+/* ---------------- GAP 事件 ---------------- */
+static void start_connect(const ble_addr_t *addr)
+{
+    int rc = ble_gap_connect(BLE_OWN_ADDR_PUBLIC, addr, SCAN_DURATION_MS,
+                             &s_conn_params, gap_event_cb, NULL);
+    if (rc != 0 && rc != BLE_HS_EALREADY) {
+        ESP_LOGW(TAG, "connect 发起失败 rc=%d", rc);
+    }
+}
+
+static int start_scan(void)
+{
+    if (s_scanning) {
+        return 0;
+    }
+    s_scanning = true;
+    int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, SCAN_DURATION_MS,
+                          &s_disc_params, gap_event_cb, NULL);
+    if (rc != 0) {
+        s_scanning = false;
+        ESP_LOGW(TAG, "扫描发起失败 rc=%d", rc);
+        return rc;
+    }
+    ESP_LOGI(TAG, "开始扫描（%d ms）", SCAN_DURATION_MS);
+    return 0;
+}
+
+static int gap_event_cb(struct ble_gap_event *event, void *arg)
+{
+    (void)arg;
+    switch (event->type) {
+
+    /* ---- 扫描结果 ---- */
+    case BLE_GAP_EVENT_DISC: {
+        struct ble_hs_adv_fields fields;
+        if (ble_hs_adv_parse_fields(&fields, event->disc.data,
+                                    event->disc.length_data) != 0) {
+            return 0;
+        }
+        bool name_ok = (fields.name != NULL && fields.name_len >= 3 &&
+                        memcmp(fields.name, TARGET_NAME_PREFIX, 3) == 0);
+        bool mfg_ok = (fields.mfg_data != NULL && fields.mfg_data_len >= 3 &&
+                       fields.mfg_data[0] == (TARGET_MFG_COMPANY & 0xFF) &&
+                       fields.mfg_data[1] == ((TARGET_MFG_COMPANY >> 8) & 0xFF) &&
+                       (fields.mfg_data[2] & TARGET_MFG_CAPS) != 0);
+        if (name_ok && mfg_ok) {
+            ESP_LOGI(TAG, "命中腕部节点 %02x:%02x:%02x:%02x:%02x:%02x rssi=%d",
+                     event->disc.addr.val[0], event->disc.addr.val[1],
+                     event->disc.addr.val[2], event->disc.addr.val[3],
+                     event->disc.addr.val[4], event->disc.addr.val[5],
+                     event->disc.rssi);
+            ble_gap_disc_cancel();
+            s_scanning = false;
+            memcpy(s_peer_mac, event->disc.addr.val, 6);
+            s_peer_mac_valid = true;
+            nvs_store_mac(s_peer_mac);
+            start_connect(&event->disc.addr);
+        }
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        s_scanning = false;
+        ESP_LOGI(TAG, "扫描结束 reason=%d", event->disc_complete.reason);
+        return 0;
+
+    /* ---- 连接结果 ---- */
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            s_conn_handle = event->connect.conn_handle;
+            s_connected = true;
+            s_combo_val_handle = 0;
+            s_combo_cccd_handle = 0;
+            ESP_LOGI(TAG, "已连接 conn=%d，开始服务发现", s_conn_handle);
+            int rc = ble_gattc_disc_svc_by_uuid(s_conn_handle,
+                                                &svc_combo_uuid.u,
+                                                disc_svc_cb, NULL);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "服务发现发起失败 rc=%d", rc);
+            }
+        } else {
+            ESP_LOGW(TAG, "连接失败 rc=%d，调度重连", event->connect.status);
+            s_connected = false;
+            s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+            if (s_reconnect_sem) {
+                xSemaphoreGive(s_reconnect_sem);
+            }
+        }
+        return 0;
+
+    /* ---- notify 数据（IDF NimBLE 事件名 NOTIFY_RX） ---- */
+    case BLE_GAP_EVENT_NOTIFY_RX:
+        if (event->notify_rx.attr_handle == s_combo_val_handle) {
+            uint8_t frame[8];
+            int rc = os_mbuf_copydata(event->notify_rx.om, 0,
+                                      sizeof(frame), frame);
+            if (rc == 0) {
+                cache_frame(frame);
+            }
+        }
+        return 0;
+
+    /* ---- 断开 ---- */
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGW(TAG, "连接断开 reason=%d，调度后台重连", event->disconnect.reason);
+        s_connected = false;
+        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        s_combo_val_handle = 0;
+        s_combo_cccd_handle = 0;
+        if (s_reconnect_sem) {
+            xSemaphoreGive(s_reconnect_sem);
+        }
+        return 0;
+
+    default:
+        return 0;
+    }
+}
+
+/* ---------------- 后台重连任务（不阻塞语音） ---------------- */
+static void reconnect_task(void *arg)
+{
+    (void)arg;
+    int retry = 0;
+    while (1) {
+        /* 等触发：开机直连 / 断开 / 连接失败 */
+        xSemaphoreTake(s_reconnect_sem, portMAX_DELAY);
+
+        while (!s_connected) {
+            if (s_peer_mac_valid) {
+                ble_addr_t addr = { .type = BLE_ADDR_PUBLIC };
+                memcpy(addr.val, s_peer_mac, 6);
+                start_connect(&addr);
+            } else {
+                start_scan();
+            }
+            /* 等连接结果（最多 12s，含扫描 10s + 连接握手余量） */
+            for (int i = 0; i < 24 && !s_connected; i++) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            if (s_connected) {
+                retry = 0;
+                break;
+            }
+            /* 指数退避：2s/4s/8s/…/封顶 30s */
+            retry++;
+            int shift = retry < 5 ? (retry - 1) : 4;
+            int backoff = 2000 << shift;
+            if (backoff > 30000) {
+                backoff = 30000;
+            }
+            ESP_LOGI(TAG, "重连（第 %d 次，退避 %d ms）", retry, backoff);
+            vTaskDelay(pdMS_TO_TICKS(backoff));
+        }
+        retry = 0;
+    }
+}
+
+/* ---------------- NimBLE host ---------------- */
+static void on_sync(void)
+{
+    ESP_LOGI(TAG, "NimBLE 主机同步完成");
+    if (s_peer_mac_valid) {
+        ESP_LOGI(TAG, "已存对端 MAC，尝试开机直连");
+        if (s_reconnect_sem) {
+            xSemaphoreGive(s_reconnect_sem);
+        }
+    } else {
+        ESP_LOGI(TAG, "无对端 MAC（首次配对），等待按键触发扫描");
+    }
+}
+
+static void nimble_host_task(void *param)
+{
+    (void)param;
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
+/* ---------------- 对外 API ---------------- */
+esp_err_t ble_central_init(void)
+{
+    s_peer_mac_valid = nvs_load_mac(s_peer_mac);
+    if (s_peer_mac_valid) {
+        ESP_LOGI(TAG, "NVS 读取对端 MAC %02x:%02x:%02x:%02x:%02x:%02x",
+                 s_peer_mac[0], s_peer_mac[1], s_peer_mac[2],
+                 s_peer_mac[3], s_peer_mac[4], s_peer_mac[5]);
+    }
+
+    s_reconnect_sem = xSemaphoreCreateBinary();
+    if (!s_reconnect_sem) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    ble_hs_cfg.reset_cb = NULL;
+    ble_hs_cfg.sync_cb = on_sync;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    ble_hs_cfg.gatts_register_cb = NULL;
+
+    nimble_port_init();
+
+    xTaskCreate(reconnect_task, "ble_reconn", 4096, NULL, 4, NULL);
+
+    nimble_port_freertos_init(nimble_host_task);
+    ESP_LOGI(TAG, "BLE central 就绪（目标 WH-* / 能力位 0x%02x）", TARGET_MFG_CAPS);
+    return ESP_OK;
+}
+
+void ble_central_start_scan(void)
+{
+    if (s_connected) {
+        ESP_LOGI(TAG, "已连接，忽略扫描请求");
+        return;
+    }
+    if (s_scanning) {
+        ESP_LOGI(TAG, "已在扫描中");
+        return;
+    }
+    if (start_scan() != 0) {
+        /* NimBLE 可能未就绪（EBUSY）：交给重连任务延迟重试 */
+        if (s_reconnect_sem) {
+            xSemaphoreGive(s_reconnect_sem);
+        }
+    }
+}
+
+bool ble_central_is_connected(void)
+{
+    return s_connected;
+}
+
+bool ble_central_get_data(ble_health_t *out)
+{
+    if (out == NULL) {
+        return false;
+    }
+    portENTER_CRITICAL(&s_cache_mux);
+    bool ok = s_health.valid;
+    if (ok) {
+        *out = s_health;
+    }
+    portEXIT_CRITICAL(&s_cache_mux);
+    return ok;
+}
