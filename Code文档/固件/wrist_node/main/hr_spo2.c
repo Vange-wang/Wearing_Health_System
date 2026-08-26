@@ -363,7 +363,7 @@ hr_spo2_result_t hr_spo2_compute(void)
             }
         }
         s_last_ok_bpm = bpm;
-        if (s_cold_agree < 2) {
+        if (s_cold_agree < 1) {
             hr_ok = false;
         }
     }

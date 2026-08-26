@@ -55,7 +55,7 @@ health:
   night_end: 6
   alert_consecutive: 3
   alert_cooldown_s: 600
-  data_stale_seconds: 120
+  data_stale_seconds: 60
   # P4 微信预警推送：接收方为子女/监护人微信（hermes send -t weixin:<chat_id>）
   wechat_chat_id: o9cq803xoWnMDS1napPGMzBmd3vs@im.wechat
   wechat_push_enabled: true
