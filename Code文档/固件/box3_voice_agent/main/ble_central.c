@@ -24,12 +24,15 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
+#include "esp_heap_caps.h"
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
+#include "device_auth_client.h"
 
 static const char *TAG = "ble_central";
 
@@ -76,17 +79,20 @@ static const struct ble_gap_disc_params s_disc_params = {
 
 /* ---- NVS ---- */
 #define NVS_NS      "ble_cfg"
-#define NVS_KEY_MAC "peer_mac"
+#define NVS_KEY_ADDR "peer_addr"
+#define NVS_KEY_MAC_LEGACY "peer_mac"
 
 /* ---- 状态 ---- */
 static volatile bool s_connected = false;
 static volatile bool s_scanning = false;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static uint16_t s_combo_svc_end_handle = 0;
 static uint16_t s_combo_val_handle = 0;
 static uint16_t s_combo_cccd_handle = 0;
+static bool s_notify_subscribed = false;
 
-static uint8_t s_peer_mac[6];
-static bool s_peer_mac_valid = false;
+static ble_addr_t s_peer_addr;
+static bool s_peer_addr_valid = false;
 
 /* 缓存（临界区保护，语音任务可随时读） */
 static portMUX_TYPE s_cache_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -102,68 +108,158 @@ static int disc_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                        const struct ble_gatt_chr *chr, void *arg);
 
 /* ---------------- NVS ---------------- */
-static void nvs_store_mac(const uint8_t mac[6])
+typedef struct {
+    uint8_t type;
+    uint8_t val[6];
+} peer_addr_record_t;
+
+static peer_addr_record_t peer_record_from_addr(const ble_addr_t *addr)
+{
+    peer_addr_record_t record = { .type = addr->type };
+    memcpy(record.val, addr->val, sizeof(record.val));
+    return record;
+}
+
+static bool peer_addr_from_record(const peer_addr_record_t *record,
+                                  ble_addr_t *addr)
+{
+    if (record->type > BLE_ADDR_RANDOM_ID) {
+        return false;
+    }
+    addr->type = record->type;
+    memcpy(addr->val, record->val, sizeof(record->val));
+    return true;
+}
+
+static bool nvs_store_addr(const ble_addr_t *addr)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
-        return;
+        return false;
     }
-    nvs_set_blob(h, NVS_KEY_MAC, mac, 6);
-    nvs_commit(h);
+    peer_addr_record_t record = peer_record_from_addr(addr);
+    esp_err_t err = nvs_set_blob(h, NVS_KEY_ADDR, &record, sizeof(record));
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
     nvs_close(h);
-    ESP_LOGI(TAG, "对端 MAC 已存 NVS %02x:%02x:%02x:%02x:%02x:%02x",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "对端地址写入 NVS 失败: %s", esp_err_to_name(err));
+        return false;
+    }
+    ESP_LOGI(TAG,
+             "对端地址已存 NVS type=%u %02x:%02x:%02x:%02x:%02x:%02x",
+             addr->type, addr->val[0], addr->val[1], addr->val[2],
+             addr->val[3], addr->val[4], addr->val[5]);
+    return true;
 }
 
-static bool nvs_load_mac(uint8_t mac[6])
+static bool nvs_load_addr(ble_addr_t *addr)
 {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
-    size_t len = 6;
-    bool ok = (nvs_get_blob(h, NVS_KEY_MAC, mac, &len) == ESP_OK && len == 6);
+    peer_addr_record_t record = {0};
+    size_t len = sizeof(record);
+    bool ok = (nvs_get_blob(h, NVS_KEY_ADDR, &record, &len) == ESP_OK &&
+               len == sizeof(record));
+    bool migrated_legacy = false;
+    if (!ok) {
+        len = sizeof(record.val);
+        if (nvs_get_blob(h, NVS_KEY_MAC_LEGACY, record.val, &len) == ESP_OK &&
+            len == sizeof(record.val)) {
+            record.type = BLE_ADDR_PUBLIC;
+            ok = true;
+            migrated_legacy = true;
+        }
+    }
     nvs_close(h);
+    if (ok) {
+        ok = peer_addr_from_record(&record, addr);
+        if (migrated_legacy) {
+            (void)nvs_store_addr(addr);
+        }
+    }
     return ok;
 }
 
 /* ---------------- 帧解析缓存 ---------------- */
-static void cache_frame(const uint8_t frame[8])
+static void invalidate_health(ble_health_t *health)
 {
-    ble_health_t h;
+    uint32_t lost = health->lost;
+    memset(health, 0, sizeof(*health));
+    health->lost = lost;
+}
+
+static void invalidate_cache(void)
+{
+    portENTER_CRITICAL(&s_cache_mux);
+    invalidate_health(&s_health);
+    portEXIT_CRITICAL(&s_cache_mux);
+}
+
+static void apply_frame(ble_health_t *health, const uint8_t frame[8],
+                        uint32_t ts_ms)
+{
+    ble_health_t h = {0};
     h.seq = frame[0];
     h.flags = frame[1];
     h.hr = (uint16_t)frame[2] | ((uint16_t)frame[3] << 8);
     h.spo2 = frame[4];
     h.conf = frame[5];
     h.battery = frame[6];
-    h.ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-    portENTER_CRITICAL(&s_cache_mux);
-    if (s_health.valid) {
+    h.ts_ms = ts_ms;
+    if (health->valid) {
         /* 丢帧检测：seq 递增（8-bit 回绕），差值 >1 计丢帧 */
-        uint8_t diff = (uint8_t)(h.seq - s_health.seq);
+        uint8_t diff = (uint8_t)(h.seq - health->seq);
         if (diff > 1) {
-            s_health.lost += (uint32_t)(diff - 1);
+            health->lost += (uint32_t)(diff - 1);
         }
     }
-    h.lost = s_health.lost;
+    h.lost = health->lost;
     h.valid = true;
-    s_health = h;
+    *health = h;
+}
+
+static void cache_frame(const uint8_t frame[8])
+{
+    ble_health_t h;
+    portENTER_CRITICAL(&s_cache_mux);
+    apply_frame(&s_health, frame,
+                (uint32_t)(esp_timer_get_time() / 1000));
+    h = s_health;
     portEXIT_CRITICAL(&s_cache_mux);
 
     ESP_LOGI(TAG, "帧 seq=%u HR=%u SpO2=%u conf=%u flags=0x%02x bat=%u lost=%lu",
              h.seq, h.hr, h.spo2, h.conf, h.flags, h.battery,
              (unsigned long)h.lost);
 
-    /* P3：仅 HR/SpO2 任一有效才触发上报。无手指帧（flags=0x00）不上报——
-     * 服务端 update 会刷新新鲜度时间戳，若连无手指帧都传，「暂时中断」永远不会触发。 */
-    if (s_upload_sem && (h.flags & 0x03) != 0) {
+    /* 每帧均上报链路/质量状态；无有效生理字段时服务端只刷新 link_ts。 */
+    if (s_upload_sem) {
         xSemaphoreGive(s_upload_sem);
     }
 }
 
 /* ---------------- GATT 客户端回调（独立于 GAP 事件） ---------------- */
+
+static int cccd_write_cb(uint16_t conn_handle,
+                         const struct ble_gatt_error *error,
+                         struct ble_gatt_attr *attr, void *arg)
+{
+    (void)arg;
+    uint16_t attr_handle = attr != NULL ? attr->handle : s_combo_cccd_handle;
+    if (error->status == 0) {
+        s_notify_subscribed = true;
+        ESP_LOGI(TAG, "CCCD 写入完成 conn=%u handle=0x%04x",
+                 conn_handle, attr_handle);
+    } else {
+        s_notify_subscribed = false;
+        ESP_LOGW(TAG, "CCCD 写入失败 status=%d conn=%u handle=0x%04x",
+                 error->status, conn_handle, attr_handle);
+    }
+    return 0;
+}
 
 /* 特征发现完成 → 找到 CCCD 并订阅 notify */
 static int disc_dsc_cb(uint16_t conn_handle,
@@ -176,9 +272,10 @@ static int disc_dsc_cb(uint16_t conn_handle,
     if (error->status == 0 && dsc != NULL &&
         ble_uuid_cmp(&dsc->uuid.u, &dsc_cccd_uuid.u) == 0) {
         s_combo_cccd_handle = dsc->handle;
-        uint8_t cccd_val = 1;   /* notify 使能 */
+        uint8_t cccd_val[2] = {0x01, 0x00};
         int rc = ble_gattc_write_flat(conn_handle, dsc->handle,
-                                      &cccd_val, 1, NULL, NULL);
+                                      cccd_val, sizeof(cccd_val), cccd_write_cb,
+                                      NULL);
         ESP_LOGI(TAG, "订阅 notify cccd=0x%04x rc=%d", dsc->handle, rc);
     } else if (error->status == BLE_HS_EDONE && s_combo_cccd_handle == 0) {
         ESP_LOGW(TAG, "未找到 CCCD（val_handle=0x%04x）", s_combo_val_handle);
@@ -196,6 +293,7 @@ static int disc_svc_cb(uint16_t conn_handle,
         ble_uuid_cmp(&service->uuid.u, &svc_combo_uuid.u) == 0) {
         ESP_LOGI(TAG, "找到综合帧服务 start=0x%04x end=0x%04x",
                  service->start_handle, service->end_handle);
+        s_combo_svc_end_handle = service->end_handle;
         int rc = ble_gattc_disc_chrs_by_uuid(conn_handle,
                                              service->start_handle,
                                              service->end_handle,
@@ -219,7 +317,7 @@ static int disc_chr_cb(uint16_t conn_handle,
         s_combo_val_handle = chr->val_handle;
         ESP_LOGI(TAG, "找到综合帧特征 val_handle=0x%04x", s_combo_val_handle);
         int rc = ble_gattc_disc_all_dscs(conn_handle, chr->val_handle,
-                                         chr->val_handle + 1,
+                                         s_combo_svc_end_handle,
                                          disc_dsc_cb, NULL);
         if (rc != 0) {
             ESP_LOGW(TAG, "描述符发现发起失败 rc=%d", rc);
@@ -229,6 +327,11 @@ static int disc_chr_cb(uint16_t conn_handle,
 }
 
 /* ---------------- GAP 事件 ---------------- */
+static bool required_caps_present(uint8_t capabilities)
+{
+    return (capabilities & TARGET_MFG_CAPS) == TARGET_MFG_CAPS;
+}
+
 static void start_connect(const ble_addr_t *addr)
 {
     int rc = ble_gap_connect(BLE_OWN_ADDR_PUBLIC, addr, SCAN_DURATION_MS,
@@ -272,7 +375,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         bool mfg_ok = (fields.mfg_data != NULL && fields.mfg_data_len >= 3 &&
                        fields.mfg_data[0] == (TARGET_MFG_COMPANY & 0xFF) &&
                        fields.mfg_data[1] == ((TARGET_MFG_COMPANY >> 8) & 0xFF) &&
-                       (fields.mfg_data[2] & TARGET_MFG_CAPS) != 0);
+                       required_caps_present(fields.mfg_data[2]));
         if (name_ok && mfg_ok) {
             ESP_LOGI(TAG, "命中腕部节点 %02x:%02x:%02x:%02x:%02x:%02x rssi=%d",
                      event->disc.addr.val[0], event->disc.addr.val[1],
@@ -281,9 +384,9 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                      event->disc.rssi);
             ble_gap_disc_cancel();
             s_scanning = false;
-            memcpy(s_peer_mac, event->disc.addr.val, 6);
-            s_peer_mac_valid = true;
-            nvs_store_mac(s_peer_mac);
+            s_peer_addr = event->disc.addr;
+            s_peer_addr_valid = true;
+            (void)nvs_store_addr(&s_peer_addr);
             start_connect(&event->disc.addr);
         }
         return 0;
@@ -299,8 +402,10 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         if (event->connect.status == 0) {
             s_conn_handle = event->connect.conn_handle;
             s_connected = true;
+            s_combo_svc_end_handle = 0;
             s_combo_val_handle = 0;
             s_combo_cccd_handle = 0;
+            s_notify_subscribed = false;
             ESP_LOGI(TAG, "已连接 conn=%d，开始服务发现", s_conn_handle);
             int rc = ble_gattc_disc_svc_by_uuid(s_conn_handle,
                                                 &svc_combo_uuid.u,
@@ -335,8 +440,11 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         ESP_LOGW(TAG, "连接断开 reason=%d，调度后台重连", event->disconnect.reason);
         s_connected = false;
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        s_combo_svc_end_handle = 0;
         s_combo_val_handle = 0;
         s_combo_cccd_handle = 0;
+        s_notify_subscribed = false;
+        invalidate_cache();
         if (s_reconnect_sem) {
             xSemaphoreGive(s_reconnect_sem);
         }
@@ -357,10 +465,8 @@ static void reconnect_task(void *arg)
         xSemaphoreTake(s_reconnect_sem, portMAX_DELAY);
 
         while (!s_connected) {
-            if (s_peer_mac_valid) {
-                ble_addr_t addr = { .type = BLE_ADDR_PUBLIC };
-                memcpy(addr.val, s_peer_mac, 6);
-                start_connect(&addr);
+            if (s_peer_addr_valid) {
+                start_connect(&s_peer_addr);
             } else {
                 start_scan();
             }
@@ -391,16 +497,24 @@ static void reconnect_task(void *arg)
 static bool http_post_health(const ble_health_t *h)
 {
     /* 无效字段传 null（服务端 Pydantic 可空；None 不覆盖值） */
-    char body[96];
+    char body[160];
+    double quality = (double)(h->conf > 100 ? 100 : h->conf) / 100.0;
     if ((h->flags & 0x01) && (h->flags & 0x02)) {
-        snprintf(body, sizeof(body), "{\"hr\":%u,\"spo2\":%u,\"seq\":%u}",
-                 h->hr, h->spo2, h->seq);
+        snprintf(body, sizeof(body),
+                 "{\"hr\":%u,\"spo2\":%u,\"seq\":%u,\"flags\":%u,\"quality\":%.2f}",
+                 h->hr, h->spo2, h->seq, h->flags, quality);
     } else if (h->flags & 0x01) {
-        snprintf(body, sizeof(body), "{\"hr\":%u,\"spo2\":null,\"seq\":%u}",
-                 h->hr, h->seq);
+        snprintf(body, sizeof(body),
+                 "{\"hr\":%u,\"spo2\":null,\"seq\":%u,\"flags\":%u,\"quality\":%.2f}",
+                 h->hr, h->seq, h->flags, quality);
+    } else if (h->flags & 0x02) {
+        snprintf(body, sizeof(body),
+                 "{\"hr\":null,\"spo2\":%u,\"seq\":%u,\"flags\":%u,\"quality\":%.2f}",
+                 h->spo2, h->seq, h->flags, quality);
     } else {
-        snprintf(body, sizeof(body), "{\"hr\":null,\"spo2\":%u,\"seq\":%u}",
-                 h->spo2, h->seq);
+        snprintf(body, sizeof(body),
+                 "{\"hr\":null,\"spo2\":null,\"seq\":%u,\"flags\":%u,\"quality\":%.2f}",
+                 h->seq, h->flags, quality);
     }
 
     esp_http_client_config_t cfg = {
@@ -417,7 +531,7 @@ static bool http_post_health(const ble_health_t *h)
 
     bool ok = false;
     int wlen = (int)strlen(body);
-    if (esp_http_client_open(client, wlen) == ESP_OK &&
+    if (open_authenticated_http(client, wlen) == ESP_OK &&
         esp_http_client_write(client, body, wlen) >= 0 &&
         esp_http_client_fetch_headers(client) >= 0 &&
         esp_http_client_get_status_code(client) == 200) {
@@ -436,7 +550,7 @@ static void upload_task(void *arg)
     while (1) {
         xSemaphoreTake(s_upload_sem, portMAX_DELAY);
         ble_health_t h;
-        if (!ble_central_get_data(&h) || (h.flags & 0x03) == 0) {
+        if (!ble_central_get_data(&h)) {
             continue;
         }
         bool ok = false;
@@ -466,8 +580,8 @@ static void upload_task(void *arg)
 static void on_sync(void)
 {
     ESP_LOGI(TAG, "NimBLE 主机同步完成");
-    if (s_peer_mac_valid) {
-        ESP_LOGI(TAG, "已存对端 MAC，尝试开机直连");
+    if (s_peer_addr_valid) {
+        ESP_LOGI(TAG, "已存对端地址，尝试开机直连");
         if (s_reconnect_sem) {
             xSemaphoreGive(s_reconnect_sem);
         }
@@ -483,14 +597,66 @@ static void nimble_host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
+#ifdef BLE_CENTRAL_SELF_TEST
+static esp_err_t ble_central_state_selftest(void)
+{
+    const uint8_t cccd_val[2] = {0x01, 0x00};
+    if (cccd_val[0] != 1 || cccd_val[1] != 0 ||
+        required_caps_present(0x01) || required_caps_present(0x02) ||
+        !required_caps_present(0x03)) {
+        return ESP_FAIL;
+    }
+
+    ble_addr_t random_addr = { .type = BLE_ADDR_RANDOM };
+    const uint8_t expected_addr[6] = {1, 2, 3, 4, 5, 6};
+    memcpy(random_addr.val, expected_addr, sizeof(expected_addr));
+    peer_addr_record_t record = peer_record_from_addr(&random_addr);
+    ble_addr_t decoded_addr = {0};
+    if (!peer_addr_from_record(&record, &decoded_addr) ||
+        decoded_addr.type != BLE_ADDR_RANDOM ||
+        memcmp(decoded_addr.val, expected_addr, sizeof(expected_addr)) != 0) {
+        return ESP_FAIL;
+    }
+
+    ble_health_t health = {0};
+    const uint8_t frame_a[8] = {250, 0x03, 75, 0, 98, 80, 100, 0};
+    const uint8_t frame_b[8] = {253, 0x03, 76, 0, 98, 80, 100, 0};
+    const uint8_t frame_c[8] = {100, 0x05, 75, 0, 0, 40, 100, 0};
+    apply_frame(&health, frame_a, 1000);
+    apply_frame(&health, frame_b, 2000);
+    if (!health.valid || health.lost != 2 || health.flags != 0x03) {
+        return ESP_FAIL;
+    }
+    invalidate_health(&health);
+    if (health.valid || health.lost != 2) {
+        return ESP_FAIL;
+    }
+    apply_frame(&health, frame_c, 3000);
+    if (!health.valid || health.seq != 100 || health.lost != 2 ||
+        health.flags != 0x05 || health.conf != 40) {
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "BLE central state self-test PASS");
+    return ESP_OK;
+}
+#endif
+
 /* ---------------- 对外 API ---------------- */
 esp_err_t ble_central_init(void)
 {
-    s_peer_mac_valid = nvs_load_mac(s_peer_mac);
-    if (s_peer_mac_valid) {
-        ESP_LOGI(TAG, "NVS 读取对端 MAC %02x:%02x:%02x:%02x:%02x:%02x",
-                 s_peer_mac[0], s_peer_mac[1], s_peer_mac[2],
-                 s_peer_mac[3], s_peer_mac[4], s_peer_mac[5]);
+#ifdef BLE_CENTRAL_SELF_TEST
+    esp_err_t selftest_err = ble_central_state_selftest();
+    if (selftest_err != ESP_OK) {
+        return selftest_err;
+    }
+#endif
+    s_peer_addr_valid = nvs_load_addr(&s_peer_addr);
+    if (s_peer_addr_valid) {
+        ESP_LOGI(TAG,
+                 "NVS 读取对端地址 type=%u %02x:%02x:%02x:%02x:%02x:%02x",
+                 s_peer_addr.type, s_peer_addr.val[0], s_peer_addr.val[1],
+                 s_peer_addr.val[2], s_peer_addr.val[3], s_peer_addr.val[4],
+                 s_peer_addr.val[5]);
     }
 
     s_reconnect_sem = xSemaphoreCreateBinary();
@@ -509,8 +675,22 @@ esp_err_t ble_central_init(void)
 
     nimble_port_init();
 
-    xTaskCreate(reconnect_task, "ble_reconn", 4096, NULL, 4, NULL);
-    xTaskCreate(upload_task, "ble_upload", 4096, NULL, 4, NULL);
+    BaseType_t reconnect_task_result = xTaskCreate(
+        reconnect_task, "ble_reconn", 4096, NULL, 4, NULL);
+    if (reconnect_task_result != pdPASS) {
+        ESP_LOGE(TAG, "reconnect task create FAILED rc=%ld",
+                 (long)reconnect_task_result);
+        return ESP_ERR_NO_MEM;
+    }
+
+    BaseType_t upload_task_result = xTaskCreateWithCaps(
+        upload_task, "ble_upload", 4096, NULL, 4, NULL,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (upload_task_result != pdPASS) {
+        ESP_LOGE(TAG, "upload task create FAILED rc=%ld",
+                 (long)upload_task_result);
+        return ESP_ERR_NO_MEM;
+    }
 
     nimble_port_freertos_init(nimble_host_task);
     ESP_LOGI(TAG, "BLE central 就绪（目标 WH-* / 能力位 0x%02x）", TARGET_MFG_CAPS);

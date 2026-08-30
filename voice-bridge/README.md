@@ -53,9 +53,11 @@ models/
   sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/   # ASR：SenseVoice（批式）
   sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/ # ASR：zipformer（流式，v0.4）
 
-# 4. Hermes API Server key + DeepSeek key（不入库）：复制到 .env
+# 4. Hermes API Server key、DeepSeek key 与设备令牌（不入库）：复制到 .env
 #    HERMES_API_KEY=<与 Hermes 侧 API_SERVER_KEY 相同>
 #    DEEPSEEK_API_KEY=<轻量通道用，DeepSeek 直连>
+#    DEVICE_TOKEN=<与 BOX-3 NVS 中相同的设备令牌>
+#    DEVICE_AUTH_MODE=required
 ```
 
 ## 部署检查（上线前必查）
@@ -79,14 +81,29 @@ venv\Scripts\python run.py      # 监听 0.0.0.0:8710
 | 接口 | 说明 |
 |---|---|
 | `GET /api/v1/health` | `{"status":"ok","asr":"ready","tts":{...},"vad":"enabled","llm":"hermes"}` |
+| `POST /api/v1/health/data` | BOX-3 上报经质量门处理的心率/血氧数据 |
+| `GET /api/v1/health/alert` | BOX-3 空闲轮询告警；无告警返回 204，有告警返回带 `X-Alert-ID` 的 WAV 帧流 |
+| `POST /api/v1/health/alert/{id}/ack` | BOX-3 完整播放后确认告警；重复确认幂等 |
 | `POST /api/v1/voice/chat` | （v0.1 保留，非流式）multipart `audio`=WAV → 完整 WAV bytes + `X-Timing` |
 | `POST /api/v1/voice/chat/stream` | （流式）multipart `audio`=WAV → 长度前缀帧流（三层路由） |
+| `POST /api/v1/voice/stream` | BOX-3 生产路径：16kHz/16bit/mono 原始 PCM 分块上传 → 长度前缀 WAV 帧流 |
 | `POST /api/v1/knowledge/reload` | 热重载知识库（重新扫描 `knowledge/*.md`）→ `{"status":"ok","count":N}` |
+
+除公开健康检查和知识库维护接口外，设备路径必须携带 `X-Device-Token`。最终配置固定为 `required`：缺失令牌返回 401，错误令牌返回 403；`observe` 只允许用于受控升级窗口，不得作为最终交付状态。
 
 ## 流式帧协议（v0.2 起不变）
 
 - 每帧 = `[4 字节大端 uint32 长度 N]` + `[N 字节 = 一句完整 WAV（16kHz/16bit/mono）]`；EOF = 响应体结束；8MB 帧长守卫
 - 响应头：`Content-Type: application/octet-stream` + `X-Audio-Framing: wav-length-prefixed` + `X-Timing`
+
+## 重构后的模块边界（2026-08-30）
+
+- `app/device_auth.py`：设备令牌校验与 `observe`/`required` 受控切换。
+- `app/audio_input.py`：原始 PCM/WAV 的大小、时长、帧对齐和 5 秒流空闲超时；停滞请求返回 408 并释放独占会话锁。
+- `app/alert_outbox.py`：告警 `pending → leased → acknowledged` 持久化状态机，失败或服务重启后可重投。
+- `app/health.py`：心率/血氧分字段新鲜度、flags/quality 质量门与连续异常判定。
+- `app/pipeline.py`：请求级状态、首帧即下发和性能打点；不把完整回复生成放到首字前。
+- `app/wechat_alert.py`：仅发送成功后计入每日额度；失败按退避策略重试，不绕过平台限额。
 
 ## 分段计量（v0.3 新增，Spec §4）
 

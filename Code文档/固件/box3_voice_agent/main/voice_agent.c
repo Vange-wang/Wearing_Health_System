@@ -15,15 +15,22 @@
  * Boot 键双击触发首次扫描；不阻塞语音首字路径）
  */
 #include <math.h>
+#include <limits.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <strings.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
@@ -39,7 +46,11 @@
 #include "lvgl.h"
 #include "cJSON.h"
 
+#include "audio_session.h"
 #include "ble_central.h"
+#include "credential_store.h"
+#include "device_auth_client.h"
+#include "wav_stream.h"
 
 static const char *TAG = "voice_agent";
 
@@ -57,45 +68,30 @@ static const char *TAG = "voice_agent";
 #define STATUS_INTERVAL_MS  30000  /* 状态轮询间隔（30s），WiFi 状态变化时立即重判 */
 #define HEALTH_TIMEOUT_MS   2000   /* health 轮询超时（2s），超时判 voicebridge 不可用 */
 
-/* ---- 多 WiFi 凭据（Spec 2026-08-18：预置三组，NVS 存储，v2 优先） ---- */
-#define MAX_WIFI_CREDS      8            /* 预留扩展位（本次用 3 组） */
-#define WIFI_NVS_NAMESPACE  "wifi_cfg"
-#define WIFI_NVS_COUNT_KEY  "count"
-#define WIFI_NVS_ENTRY_KEY  "cred_%d"
-
-#define WIFI_AUTH_WPA2_PSK_T  0          /* 预留：未来校园网网页认证填 portal */
-
-typedef struct {
-    char ssid[33];        /* SSID 最长 32 字节 */
-    char pass[65];        /* 密码最长 64 字节 */
-    uint8_t prio;         /* 优先级，小值优先（1 最高） */
-    uint8_t auth_type;    /* 预留扩展位（本次全 WPA2-PSK） */
-} wifi_cred_t;
-
-/* 默认三组凭据（首次启动写入 NVS；之后改网络改 NVS 不重烧固件） */
-static const wifi_cred_t DEFAULT_WIFI_CREDS[3] = {
-    { "v2",     "wzwzwzwz",       1, WIFI_AUTH_WPA2_PSK_T },
-    { "2702",   "LISHAN919827@",  2, WIFI_AUTH_WPA2_PSK_T },
-    { "L1122S", "LISHAN919827@",  3, WIFI_AUTH_WPA2_PSK_T },
-};
+#define MAX_WIFI_CREDS 8
 
 #define SAMPLE_RATE  16000
 #define CHANNELS     2                    /* ES7210 双麦立体声 */
 #define BITS         16
 #define CHUNK_BYTES  4096                 /* 录音/上传分块 */
-#define MAX_FRAME    2 * 1024 * 1024      /* 单帧守卫（对齐服务端 8MB，本地更小） */
-#define WAV_HEADER   44
+#define MAX_FRAME    WAV_STREAM_MAX_FRAME_BYTES
+#define ALERT_ID_LENGTH 36
+#define ALERT_ACK_SUFFIX "/ack"
+#define TALK_TASK_STACK_SIZE 4096
+#define CAPTURE_TASK_STACK_SIZE 4096
 
 static esp_codec_dev_handle_t s_mic = NULL;
 static esp_codec_dev_handle_t s_spk = NULL;
-static volatile bool s_recording = false;
-static volatile bool s_cancel = false;      /* 打断当前播放（按键按下时置位） */
-static volatile bool s_talk_active = false; /* P4：对话进行中（录音+播放全程），预警播报不抢占 */
-static volatile bool s_alert_playing = false; /* P4：预警播报进行中，对话等待其让位 */
 
-/* 静态 scratch 缓冲（单线程任务内，避免栈溢出） */
-static int16_t s_stereo[CHUNK_BYTES / 2];   /* 录音立体声分块 */
-static int16_t s_mono[CHUNK_BYTES / 2];     /* 降混单声道分块 */
+/* 采集与播放使用独立静态 scratch，按键打断预警时不会争用同一缓冲区。 */
+static int16_t s_capture_stereo[CHUNK_BYTES / 2];
+static int16_t s_capture_mono[CHUNK_BYTES / (CHANNELS * 2)];
+static int16_t s_upload_mono[CHUNK_BYTES / (CHANNELS * 2)];
+static int16_t s_playback_stereo[CHUNK_BYTES / 2];
+static uint8_t s_wav_pcm[CHUNK_BYTES / 2];
+static TaskHandle_t s_capture_task_handle = NULL;
+static TaskHandle_t s_talk_task_handle = NULL;
+static volatile int64_t s_talk_release_us = 0;
 
 /* 屏幕 emoji 状态显示（需求1）：WiFi 状态标志 + LVGL 图片对象 */
 static volatile bool s_wifi_up = false;     /* got IP 置 true，disconnected 置 false */
@@ -106,12 +102,24 @@ static void talk_btn_cb(void *btn_handle, void *usr_data)
 {
     button_event_t ev = iot_button_get_event((button_handle_t)btn_handle);
     if (ev == BUTTON_PRESS_DOWN) {
-        ESP_LOGI(TAG, "btn PRESS_DOWN -> start recording");
-        s_recording = true;
-        s_cancel = true;   /* 打断当前播放（若有），长回复期间按键可响应 */
+        ESP_LOGI(TAG, "btn PRESS_DOWN -> capture immediately");
+        audio_session_begin_capture();
+        audio_session_cancel_alert();
+        if (s_capture_task_handle != NULL) {
+            xTaskNotifyGive(s_capture_task_handle);
+        }
+        if (s_talk_task_handle != NULL) {
+            xTaskNotifyGive(s_talk_task_handle);
+        }
     } else if (ev == BUTTON_PRESS_UP) {
-        ESP_LOGI(TAG, "btn PRESS_UP -> stop recording");
-        s_recording = false;
+        bool short_press = audio_session_cancel_short_press();
+        if (!short_press) {
+            s_talk_release_us = esp_timer_get_time();
+        }
+        ESP_LOGI(TAG, "btn PRESS_UP -> %s", short_press ? "discard short capture" : "finish capture");
+        if (s_talk_task_handle != NULL) {
+            xTaskNotifyGive(s_talk_task_handle);
+        }
     }
 }
 
@@ -178,46 +186,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     }
 }
 
-/* 读 NVS 凭据；NVS 空则写默认三组（首次启动） */
-static void wifi_creds_load(wifi_cred_t *creds, int *out_count)
-{
-    *out_count = 0;
-    nvs_handle_t h;
-    if (nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) {
-        return;
-    }
-    uint8_t count = 0;
-    if (nvs_get_u8(h, WIFI_NVS_COUNT_KEY, &count) == ESP_ERR_NVS_NOT_FOUND) {
-        /* 首次启动：写入默认三组凭据 */
-        count = 3;
-        nvs_set_u8(h, WIFI_NVS_COUNT_KEY, count);
-        for (int i = 0; i < count; i++) {
-            char key[16];
-            snprintf(key, sizeof(key), WIFI_NVS_ENTRY_KEY, i);
-            nvs_set_blob(h, key, &DEFAULT_WIFI_CREDS[i], sizeof(wifi_cred_t));
-        }
-        nvs_commit(h);
-        ESP_LOGI(TAG, "WiFi 凭据首次写入 NVS（%d 组）", count);
-    }
-    for (int i = 0; i < count && i < MAX_WIFI_CREDS; i++) {
-        char key[16];
-        snprintf(key, sizeof(key), WIFI_NVS_ENTRY_KEY, i);
-        size_t len = sizeof(wifi_cred_t);
-        if (nvs_get_blob(h, key, &creds[i], &len) == ESP_OK) {
-            (*out_count)++;
-        }
-    }
-    nvs_close(h);
-}
-
 /* 扫描匹配：选 prio 最小（最高优先），同 prio 取 RSSI 最强；设置 STA 配置并 connect */
 static void wifi_scan_and_connect(void)
 {
-    wifi_cred_t creds[MAX_WIFI_CREDS];
-    int cred_count = 0;
-    wifi_creds_load(creds, &cred_count);
-    if (cred_count <= 0) {
-        ESP_LOGE(TAG, "无 WiFi 凭据，跳过连接");
+    wifi_credential_t creds[MAX_WIFI_CREDS] = { 0 };
+    size_t cred_count = 0;
+    esp_err_t credential_err = credential_store_load_wifi(
+        creds, MAX_WIFI_CREDS, &cred_count);
+    if (credential_err != ESP_OK || cred_count == 0) {
+        ESP_LOGE(TAG, "设备未配置 WiFi 凭据，等待本地 NVS 配置");
         return;
     }
 
@@ -247,13 +224,13 @@ static void wifi_scan_and_connect(void)
     int best_prio = 255;
     int best_rssi = -128;
     for (int i = 0; i < ap_num; i++) {
-        for (int c = 0; c < cred_count; c++) {
+        for (size_t c = 0; c < cred_count; c++) {
             if (strcmp((char *)aps[i].ssid, creds[c].ssid) == 0) {
-                if (creds[c].prio < best_prio ||
-                    (creds[c].prio == best_prio && aps[i].rssi > best_rssi)) {
-                    best_prio = creds[c].prio;
+                if (creds[c].priority < best_prio ||
+                    (creds[c].priority == best_prio && aps[i].rssi > best_rssi)) {
+                    best_prio = creds[c].priority;
                     best_rssi = aps[i].rssi;
-                    best_cred = c;
+                    best_cred = (int)c;
                 }
             }
         }
@@ -266,8 +243,20 @@ static void wifi_scan_and_connect(void)
 
     ESP_LOGI(TAG, "选择连接 ssid=%s rssi=%d prio=%d", creds[best_cred].ssid, best_rssi, best_prio);
     wifi_config_t wc = { 0 };
-    strcpy((char *)wc.sta.ssid, creds[best_cred].ssid);
-    strcpy((char *)wc.sta.password, creds[best_cred].pass);
+    size_t ssid_length = strnlen(creds[best_cred].ssid,
+                                 sizeof(creds[best_cred].ssid));
+    size_t password_length = strnlen(creds[best_cred].password,
+                                     sizeof(creds[best_cred].password));
+    if (ssid_length == 0 || ssid_length >= sizeof(wc.sta.ssid) ||
+        password_length >= sizeof(wc.sta.password)) {
+        ESP_LOGE(TAG, "所选 WiFi 凭据长度无效，拒绝连接");
+        free(aps);
+        return;
+    }
+    memcpy(wc.sta.ssid, creds[best_cred].ssid, ssid_length);
+    wc.sta.ssid[ssid_length] = '\0';
+    memcpy(wc.sta.password, creds[best_cred].password, password_length);
+    wc.sta.password[password_length] = '\0';
     wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;  /* 本次全 WPA2（含 iPhone 热点「最大兼容性」） */
     wc.sta.channel = 0;                               /* 信道不固定，自动全信道扫描 */
     wc.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
@@ -341,40 +330,65 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-/* ---------------- 播放：跳过 WAV 头，单声道升混立体声（可被按键打断） ---------------- */
-static bool play_wav(const uint8_t *wav, int len)
+typedef struct {
+    audio_session_owner_t owner;
+} codec_output_context_t;
+
+static bool owner_cancelled(void *user)
 {
-    if (len <= WAV_HEADER) {
-        return true;
+    codec_output_context_t *context = (codec_output_context_t *)user;
+    return audio_session_should_cancel(context->owner) ||
+           !audio_session_owner_is(context->owner);
+}
+
+/* esp_codec_dev_write reports success/error rather than a byte count. Adapt a
+ * successful call to an exact full write; wav_stream retries partial writers. */
+static int codec_output_write(void *user, const uint8_t *data, size_t length)
+{
+    codec_output_context_t *context = (codec_output_context_t *)user;
+    if (owner_cancelled(user) || length > INT_MAX) {
+        return -1;
     }
-    const int16_t *pcm = (const int16_t *)(wav + WAV_HEADER);
-    int n = (len - WAV_HEADER) / 2;   /* 单声道样本数 */
-    int idx = 0;
-    while (idx < n) {
-        if (s_cancel) {
-            return false;   /* 按键打断，停止播放 */
+    int result = esp_codec_dev_write(s_spk, (void *)data, (int)length);
+    if (result == 0 && context->owner == AUDIO_SESSION_OWNER_TALK &&
+        s_talk_release_us > 0) {
+        int64_t release_to_codec_us = esp_timer_get_time() - s_talk_release_us;
+        s_talk_release_us = 0;
+        ESP_LOGI(TAG, "LATENCY release_to_codec_us=%lld",
+                 (long long)release_to_codec_us);
+    }
+    return result == 0 ? (int)length : -1;
+}
+
+static bool http_write_all(esp_http_client_handle_t client, const void *data,
+                           size_t length, audio_session_owner_t owner)
+{
+    const char *bytes = (const char *)data;
+    size_t offset = 0;
+    while (offset < length) {
+        if (audio_session_should_cancel(owner) || !audio_session_owner_is(owner)) {
+            return false;
         }
-        int cnt = n - idx;
-        int max_cnt = sizeof(s_stereo) / 4;
-        if (cnt > max_cnt) {
-            cnt = max_cnt;
+        size_t remaining = length - offset;
+        if (remaining > INT_MAX) {
+            return false;
         }
-        for (int i = 0; i < cnt; i++) {
-            s_stereo[i * 2] = pcm[idx + i];
-            s_stereo[i * 2 + 1] = pcm[idx + i];
+        int written = esp_http_client_write(client, bytes + offset, (int)remaining);
+        if (written <= 0 || (size_t)written > remaining) {
+            return false;
         }
-        esp_codec_dev_write(s_spk, (uint8_t *)s_stereo, cnt * 4);
-        idx += cnt;
+        offset += (size_t)written;
     }
     return true;
 }
 
 /* ---------------- 精确读取 n 字节（跨 esp_http_client_read 分片，可被打断） ---------------- */
-static bool read_exact(esp_http_client_handle_t client, uint8_t *buf, int n)
+static bool read_exact(esp_http_client_handle_t client, uint8_t *buf, int n,
+                       audio_session_owner_t owner)
 {
     int got = 0;
     while (got < n) {
-        if (s_cancel) {
+        if (audio_session_should_cancel(owner) || !audio_session_owner_is(owner)) {
             return false;   /* 按键打断 */
         }
         int r = esp_http_client_read(client, (char *)(buf + got), n - got);
@@ -386,8 +400,63 @@ static bool read_exact(esp_http_client_handle_t client, uint8_t *buf, int n)
     return true;
 }
 
+/* Read one length-prefixed frame header first, validate canonical mono PCM,
+ * then stream fixed chunks directly through mono-to-stereo conversion. */
+static bool stream_wav_frame(esp_http_client_handle_t client, uint32_t frame_length,
+                             audio_session_owner_t owner)
+{
+    if (frame_length < WAV_STREAM_HEADER_BYTES || frame_length > MAX_FRAME) {
+        ESP_LOGE(TAG, "WAV frame length rejected: %u", (unsigned)frame_length);
+        return false;
+    }
+
+    uint8_t header[WAV_STREAM_HEADER_BYTES];
+    if (!read_exact(client, header, sizeof(header), owner)) {
+        ESP_LOGE(TAG, "WAV header interrupted");
+        return false;
+    }
+
+    codec_output_context_t output_context = { .owner = owner };
+    wav_stream_t stream;
+    wav_stream_result_t result = wav_stream_begin(
+        &stream, header, sizeof(header), frame_length, esp_get_free_heap_size(),
+        s_playback_stereo, sizeof(s_playback_stereo) / sizeof(s_playback_stereo[0]),
+        codec_output_write, owner_cancelled, &output_context);
+    if (result != WAV_STREAM_OK) {
+        ESP_LOGE(TAG, "WAV header rejected: %s", wav_stream_result_name(result));
+        return false;
+    }
+
+    uint32_t remaining = frame_length - WAV_STREAM_HEADER_BYTES;
+    while (remaining > 0) {
+        if (owner_cancelled(&output_context)) {
+            result = WAV_STREAM_CANCELLED;
+            break;
+        }
+        size_t wanted = remaining < sizeof(s_wav_pcm) ? remaining : sizeof(s_wav_pcm);
+        int received = esp_http_client_read(client, (char *)s_wav_pcm, (int)wanted);
+        if (received <= 0) {
+            result = WAV_STREAM_TRUNCATED;
+            break;
+        }
+        result = wav_stream_write(&stream, s_wav_pcm, (size_t)received);
+        if (result != WAV_STREAM_OK) {
+            break;
+        }
+        remaining -= (uint32_t)received;
+    }
+    if (result == WAV_STREAM_OK) {
+        result = wav_stream_end(&stream);
+    }
+    if (result != WAV_STREAM_OK) {
+        ESP_LOGE(TAG, "WAV stream failed: %s", wav_stream_result_name(result));
+        return false;
+    }
+    return true;
+}
+
 /* ---------------- 一轮对话：边录边传（chunked 流式）→ 接收播放 ---------------- */
-static void voice_round(void)
+static void voice_round(uint32_t capture_generation)
 {
     /* 1. 创建 HTTP client，open(-1) 触发 Transfer-Encoding: chunked */
     esp_http_client_config_t cfg = {
@@ -401,78 +470,94 @@ static void voice_round(void)
         ESP_LOGE(TAG, "http client init FAILED");
         return;
     }
-    esp_http_client_set_header(client, "Content-Type", "application/octet-stream");
-    esp_http_client_open(client, -1);   /* write_len=-1 → chunked（服务端边收边流式 ASR） */
+    bool opened = false;
+    if (esp_http_client_set_header(client, "Content-Type", "application/octet-stream") != ESP_OK) {
+        ESP_LOGE(TAG, "voice content-type header FAILED");
+        goto cleanup;
+    }
+    esp_err_t open_err = open_authenticated_http(client, -1);
+    if (open_err != ESP_OK) {
+        ESP_LOGE(TAG, "protected voice request unavailable");
+        goto cleanup;
+    }
+    opened = true;
 
     /* 2. 边录边传：每读一块 PCM，手动 chunk 编码后 write（esp_http_client 不做自动 chunk 编码） */
     ESP_LOGI(TAG, "REC+UPLOAD START (chunked)");
     int uploaded = 0;
-    while (s_recording) {
-        int r = esp_codec_dev_read(s_mic, (uint8_t *)s_stereo, sizeof(s_stereo));
-        if (r != 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+    bool upload_ok = true;
+    while (!audio_session_should_cancel(AUDIO_SESSION_OWNER_TALK)) {
+        size_t samples = audio_session_read_capture(
+            s_upload_mono, sizeof(s_upload_mono) / sizeof(s_upload_mono[0]));
+        if (samples == 0) {
+            if (!audio_session_capture_active() && !audio_session_capture_has_buffered()) {
+                break;
+            }
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
         }
-        int n_frames = sizeof(s_stereo) / (CHANNELS * 2);
-        for (int i = 0; i < n_frames; i++) {
-            s_mono[i] = (int16_t)((s_stereo[i * 2] + s_stereo[i * 2 + 1]) / 2);
-        }
-        int wlen = n_frames * 2;
+        int wlen = (int)(samples * sizeof(int16_t));
         /* 手动 chunk 编码：size 十六进制行 + 数据 + CRLF */
         char hdr[16];
         int hlen = snprintf(hdr, sizeof(hdr), "%x\r\n", wlen);
-        if (esp_http_client_write(client, hdr, hlen) < 0 ||
-            esp_http_client_write(client, (char *)s_mono, wlen) < 0 ||
-            esp_http_client_write(client, "\r\n", 2) < 0) {
+        if (hlen <= 0 || hlen >= (int)sizeof(hdr) ||
+            !http_write_all(client, hdr, (size_t)hlen, AUDIO_SESSION_OWNER_TALK) ||
+            !http_write_all(client, s_upload_mono, (size_t)wlen, AUDIO_SESSION_OWNER_TALK) ||
+            !http_write_all(client, "\r\n", 2, AUDIO_SESSION_OWNER_TALK)) {
             ESP_LOGE(TAG, "upload write FAILED");
+            upload_ok = false;
             break;
         }
         uploaded += wlen;
     }
     /* 结束 chunk（0 长度 chunk = 按键松开的流结束信号） */
-    esp_http_client_write(client, "0\r\n\r\n", 5);
+    if (upload_ok && !audio_session_should_cancel(AUDIO_SESSION_OWNER_TALK)) {
+        upload_ok = http_write_all(client, "0\r\n\r\n", 5,
+                                   AUDIO_SESSION_OWNER_TALK);
+    }
     ESP_LOGI(TAG, "REC+UPLOAD END, pcm bytes=%d", uploaded);
 
+    if (!upload_ok || audio_session_should_cancel(AUDIO_SESSION_OWNER_TALK) ||
+        capture_generation != audio_session_capture_generation()) {
+        goto cleanup;
+    }
+
     /* 3. 读响应头 */
-    esp_http_client_fetch_headers(client);
+    if (esp_http_client_fetch_headers(client) < 0) {
+        ESP_LOGE(TAG, "voice response headers FAILED");
+        goto cleanup;
+    }
     int status = esp_http_client_get_status_code(client);
     ESP_LOGI(TAG, "HTTP status=%d", status);
     if (status != 200) {
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return;
+        goto cleanup;
     }
 
     /* 逐帧解析：4 字节大端长度 + WAV 载荷 */
     uint8_t hdr[4];
     int frames = 0;
-    while (read_exact(client, hdr, 4)) {
+    while (read_exact(client, hdr, 4, AUDIO_SESSION_OWNER_TALK)) {
         uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
                        ((uint32_t)hdr[2] << 8) | (uint32_t)hdr[3];
-        if (len == 0 || len > MAX_FRAME) {
+        if (len < WAV_STREAM_HEADER_BYTES || len > MAX_FRAME) {
             ESP_LOGE(TAG, "bad frame len=%u", (unsigned)len);
             break;
         }
-        uint8_t *wav = malloc(len);
-        if (!wav) {
-            ESP_LOGE(TAG, "frame alloc FAILED (%u)", (unsigned)len);
+        if (!stream_wav_frame(client, len, AUDIO_SESSION_OWNER_TALK)) {
             break;
         }
-        if (!read_exact(client, wav, (int)len)) {
-            free(wav);
-            break;
-        }
-        if (!play_wav(wav, (int)len)) {
-            free(wav);
-            break;   /* 按键打断 */
-        }
-        free(wav);
         frames++;
     }
-    ESP_LOGI(TAG, "PLAY DONE, frames=%d%s", frames, s_cancel ? " (cancelled)" : "");
+    ESP_LOGI(TAG, "PLAY DONE, frames=%d%s", frames,
+             audio_session_should_cancel(AUDIO_SESSION_OWNER_TALK) ? " (cancelled)" : "");
 
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
+cleanup:
+    if (opened && esp_http_client_close(client) != ESP_OK) {
+        ESP_LOGW(TAG, "voice HTTP close failed");
+    }
+    if (esp_http_client_cleanup(client) != ESP_OK) {
+        ESP_LOGW(TAG, "voice HTTP cleanup failed");
+    }
 }
 
 /* ---------------- 对话任务：录音上传 + 收帧播放（可被按键打断） ---------------- */
@@ -480,46 +565,152 @@ static void voice_round(void)
  * 避免 Boot 键双击触发 BLE 扫描时产生空 HTTP 请求。 */
 #define MIN_HOLD_MS 300
 
-static void talk_task(void *arg)
+/* 独立高优先级采集任务：按键按下即读麦克风；确认前进入固定预缓冲，
+ * 确认后进入有界 live ring。采集循环无 malloc/free。 */
+static void capture_task(void *arg)
 {
+    (void)arg;
     while (true) {
-        while (!s_recording) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        /* 连续按住 300ms 才进入对话；中途释放 = 短按手势，跳过 */
-        int64_t t0 = esp_timer_get_time();
-        bool skip = false;
-        while (true) {
-            if (!s_recording) {
-                skip = true;
-                break;
-            }
-            if (esp_timer_get_time() - t0 >= MIN_HOLD_MS * 1000) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        if (skip) {
-            ESP_LOGI(TAG, "短按忽略（双击/单击手势，不发起对话）");
-            vTaskDelay(pdMS_TO_TICKS(50));
+        if (!audio_session_capture_active()) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
         }
-        /* P4：预警播报进行中则等待让位（按键按下已置 s_cancel，播报会立即退出） */
-        while (s_alert_playing) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+
+        int r = esp_codec_dev_read(s_mic, (uint8_t *)s_capture_stereo,
+                                   sizeof(s_capture_stereo));
+        if (r != 0) {
+            vTaskDelay(1);
+            continue;
         }
-        s_cancel = false;   /* 清除打断标志，开始新对话 */
-        s_talk_active = true;
-        ESP_LOGI(TAG, ">> TALK START");
-        voice_round();
-        s_talk_active = false;
-        ESP_LOGI(TAG, "<< TALK DONE");
-        if (!s_recording) {
-            /* 正常结束：松开后防抖 */
-            vTaskDelay(pdMS_TO_TICKS(200));
+        const size_t frames = sizeof(s_capture_stereo) / (CHANNELS * sizeof(int16_t));
+        for (size_t i = 0; i < frames; i++) {
+            int32_t mixed = (int32_t)s_capture_stereo[i * 2] +
+                            s_capture_stereo[i * 2 + 1];
+            s_capture_mono[i] = (int16_t)(mixed / 2);
         }
-        /* 若被打断（s_recording 仍 true，用户还按着），立即循环开始新录音，不丢语音 */
+        size_t accepted = audio_session_write_capture(s_capture_mono, frames);
+        if (accepted != frames && audio_session_capture_active()) {
+            ESP_LOGW(TAG, "capture ring full: accepted=%u/%u", (unsigned)accepted,
+                     (unsigned)frames);
+        }
+
+        if (audio_session_capture_pending() &&
+            audio_session_capture_elapsed_us() >= MIN_HOLD_MS * 1000LL &&
+            audio_session_confirm_long_press()) {
+            ESP_LOGI(TAG, "long press confirmed; prebuffer ready");
+            if (s_talk_task_handle != NULL) {
+                xTaskNotifyGive(s_talk_task_handle);
+            }
+        } else if (audio_session_capture_confirmed() &&
+                   s_talk_task_handle != NULL) {
+            xTaskNotifyGive(s_talk_task_handle);
+        }
     }
+}
+
+static void talk_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        if (!audio_session_capture_confirmed()) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+        uint32_t generation = audio_session_capture_generation();
+        while (!audio_session_acquire_playback(AUDIO_SESSION_OWNER_TALK)) {
+            if (generation != audio_session_capture_generation() ||
+                !audio_session_capture_confirmed()) {
+                break;
+            }
+            vTaskDelay(1);
+        }
+        if (!audio_session_owner_is(AUDIO_SESSION_OWNER_TALK) ||
+            generation != audio_session_capture_generation()) {
+            audio_session_release(AUDIO_SESSION_OWNER_TALK);
+            continue;
+        }
+        ESP_LOGI(TAG, ">> TALK START");
+        voice_round(generation);
+        audio_session_release(AUDIO_SESSION_OWNER_TALK);
+        audio_session_complete_capture(generation);
+        ESP_LOGI(TAG, "talk stack high-water remaining=%u bytes",
+                 (unsigned)uxTaskGetStackHighWaterMark(NULL));
+        ESP_LOGI(TAG, "<< TALK DONE");
+    }
+}
+
+static bool valid_alert_id(const char *alert_id)
+{
+    if (alert_id == NULL || strlen(alert_id) != ALERT_ID_LENGTH) {
+        return false;
+    }
+    for (size_t i = 0; i < ALERT_ID_LENGTH; ++i) {
+        bool hyphen_position = i == 8 || i == 13 || i == 18 || i == 23;
+        if (hyphen_position ? alert_id[i] != '-' : !isxdigit((unsigned char)alert_id[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+typedef struct {
+    char alert_id[ALERT_ID_LENGTH + 1];
+} alert_response_context_t;
+
+static esp_err_t alert_http_event(esp_http_client_event_t *event)
+{
+    alert_response_context_t *context = (alert_response_context_t *)event->user_data;
+    if (context != NULL && event->event_id == HTTP_EVENT_ON_HEADER &&
+        event->header_key != NULL && event->header_value != NULL &&
+        strcasecmp(event->header_key, "X-Alert-ID") == 0) {
+        size_t length = strnlen(event->header_value, ALERT_ID_LENGTH + 1);
+        if (length == ALERT_ID_LENGTH) {
+            memcpy(context->alert_id, event->header_value, ALERT_ID_LENGTH);
+            context->alert_id[ALERT_ID_LENGTH] = '\0';
+        }
+    }
+    return ESP_OK;
+}
+
+static bool post_alert_ack(const char *alert_id)
+{
+    if (!valid_alert_id(alert_id)) {
+        return false;
+    }
+    char url[sizeof(ALERT_URL) + ALERT_ID_LENGTH + sizeof(ALERT_ACK_SUFFIX) + 1];
+    int length = snprintf(url, sizeof(url), "%s/%s%s", ALERT_URL, alert_id,
+                          ALERT_ACK_SUFFIX);
+    if (length <= 0 || length >= (int)sizeof(url)) {
+        return false;
+    }
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 5000,
+        .buffer_size = 512,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client == NULL) {
+        return false;
+    }
+    bool opened = false;
+    bool acknowledged = false;
+    if (open_authenticated_http(client, 0) == ESP_OK) {
+        opened = true;
+        if (esp_http_client_fetch_headers(client) >= 0 &&
+            esp_http_client_get_status_code(client) == 200) {
+            acknowledged = true;
+        }
+    }
+    if (opened && esp_http_client_close(client) != ESP_OK) {
+        acknowledged = false;
+    }
+    if (esp_http_client_cleanup(client) != ESP_OK) {
+        acknowledged = false;
+    }
+    ESP_LOGI(TAG, "ALERT ack id=%s result=%s", alert_id,
+             acknowledged ? "ok" : "failed");
+    return acknowledged;
 }
 
 /* ---------------- P4 预警空闲轮询（Spec 方案 A：不打断对话，30s/次） ---------------- */
@@ -528,58 +719,72 @@ static void talk_task(void *arg)
 /* 单次轮询：200 → 逐帧播放（长度前缀 WAV，复用语音帧协议）；204/网络失败 → 静默返回 */
 static void alert_poll_once(void)
 {
+    alert_response_context_t response_context = { 0 };
     esp_http_client_config_t cfg = {
         .url = ALERT_URL,
         .method = HTTP_METHOD_GET,
         .timeout_ms = 5000,
         .buffer_size = 1024,
+        .event_handler = alert_http_event,
+        .user_data = &response_context,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
         return;
     }
-    if (esp_http_client_open(client, 0) != ESP_OK) {
-        esp_http_client_cleanup(client);
-        return;
+    bool opened = false;
+    bool playback_complete = false;
+    char alert_id[ALERT_ID_LENGTH + 1] = { 0 };
+    if (open_authenticated_http(client, 0) != ESP_OK) {
+        goto cleanup;
     }
+    opened = true;
     if (esp_http_client_fetch_headers(client) < 0) {
-        esp_http_client_close(client);
-        esp_http_client_cleanup(client);
-        return;
+        goto cleanup;
     }
     int status = esp_http_client_get_status_code(client);
-    if (status == 200) {
+    if (status == 200 && audio_session_owner_is(AUDIO_SESSION_OWNER_ALERT) &&
+        !audio_session_should_cancel(AUDIO_SESSION_OWNER_ALERT)) {
+        if (!valid_alert_id(response_context.alert_id)) {
+            ESP_LOGE(TAG, "ALERT response missing/invalid X-Alert-ID");
+            goto cleanup;
+        }
+        memcpy(alert_id, response_context.alert_id, ALERT_ID_LENGTH);
+        alert_id[ALERT_ID_LENGTH] = '\0';
         ESP_LOGI(TAG, "ALERT 有预警，开始播报");
-        s_alert_playing = true;
         uint8_t hdr[4];
         int frames = 0;
-        while (read_exact(client, hdr, 4)) {
+        bool stream_ok = true;
+        while (read_exact(client, hdr, 4, AUDIO_SESSION_OWNER_ALERT)) {
             uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
                            ((uint32_t)hdr[2] << 8) | (uint32_t)hdr[3];
-            if (len == 0 || len > MAX_FRAME) {
+            if (len < WAV_STREAM_HEADER_BYTES || len > MAX_FRAME) {
                 ESP_LOGE(TAG, "ALERT bad frame len=%u", (unsigned)len);
+                stream_ok = false;
                 break;
             }
-            uint8_t *wav = malloc(len);
-            if (!wav) {
-                break;
-            }
-            if (!read_exact(client, wav, (int)len)) {
-                free(wav);
-                break;
-            }
-            bool done = play_wav(wav, (int)len);
-            free(wav);
-            frames++;
-            if (!done) {
+            if (!stream_wav_frame(client, len, AUDIO_SESSION_OWNER_ALERT)) {
+                stream_ok = false;
                 break;   /* 按键打断 */
             }
+            frames++;
         }
-        s_alert_playing = false;
+        playback_complete = stream_ok && frames > 0 &&
+                            !audio_session_should_cancel(AUDIO_SESSION_OWNER_ALERT) &&
+                            audio_session_owner_is(AUDIO_SESSION_OWNER_ALERT) &&
+                            esp_http_client_is_complete_data_received(client);
         ESP_LOGI(TAG, "ALERT PLAY DONE frames=%d", frames);
     }
-    esp_http_client_close(client);
-    esp_http_client_cleanup(client);
+cleanup:
+    if (opened && esp_http_client_close(client) != ESP_OK) {
+        ESP_LOGW(TAG, "alert HTTP close failed");
+    }
+    if (esp_http_client_cleanup(client) != ESP_OK) {
+        ESP_LOGW(TAG, "alert HTTP cleanup failed");
+    }
+    if (playback_complete) {
+        post_alert_ack(alert_id);
+    }
 }
 
 /* 空闲轮询任务：WiFi 可用且无对话进行中才轮询；播报可被按键打断 */
@@ -587,8 +792,9 @@ static void alert_poll_task(void *arg)
 {
     (void)arg;
     while (1) {
-        if (s_wifi_up && !s_recording && !s_talk_active && !s_alert_playing) {
+        if (s_wifi_up && audio_session_acquire_playback(AUDIO_SESSION_OWNER_ALERT)) {
             alert_poll_once();
+            audio_session_release(AUDIO_SESSION_OWNER_ALERT);
         }
         vTaskDelay(pdMS_TO_TICKS(ALERT_POLL_INTERVAL_MS));
     }
@@ -742,6 +948,13 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "=== voice_agent boot (v0.4) ===");
 
+#ifdef CREDENTIAL_STORE_SELF_TEST
+    ESP_ERROR_CHECK(credential_store_selftest());
+#endif
+#ifdef DEVICE_AUTH_CLIENT_SELF_TEST
+    ESP_ERROR_CHECK(device_auth_client_selftest());
+#endif
+
     /* 音频（I2S + ES7210 录音 + ES8311 播放）—— 复用 M0 V-04/V-05 已验证配置 */
     ESP_ERROR_CHECK(bsp_i2c_init());
     i2s_std_config_t i2s_cfg = {
@@ -777,6 +990,7 @@ void app_main(void)
         return;
     }
     ESP_LOGI(TAG, "codecs open OK: %d Hz %d ch %d bit", SAMPLE_RATE, CHANNELS, BITS);
+    audio_session_init();
 
     /* 屏幕 emoji 状态显示（需求1）：在 WiFi 之前初始化，WiFi 就绪后启动状态任务 */
     display_init();
@@ -784,11 +998,22 @@ void app_main(void)
     /* WiFi：初始化 + 管理任务（扫描连接 + 断开重连切换），等首次拿到 IP 再进入交互 */
     s_wifi_events = xEventGroupCreate();
     wifi_init();
+    esp_err_t auth_ret = device_auth_client_init();
+    if (auth_ret != ESP_OK) {
+        ESP_LOGE(TAG, "device authentication unavailable; protected requests disabled");
+    } else {
+        ESP_LOGI(TAG, "device authentication ready");
+    }
     xTaskCreate(wifi_task, "wifi", 4096, NULL, 5, NULL);
     xEventGroupWaitBits(s_wifi_events, WIFI_BIT_CONNECTED, pdFALSE, pdFALSE, pdMS_TO_TICKS(30000));
 
     /* 屏幕 emoji 状态任务（低优先级，30s 轮询 + WiFi 状态变化即时重判） */
-    xTaskCreate(status_task, "status", 4096, NULL, 4, NULL);
+    BaseType_t status_task_result = xTaskCreate(
+        status_task, "status", 4096, NULL, 4, NULL);
+    if (status_task_result != pdPASS) {
+        ESP_LOGE(TAG, "status task create FAILED rc=%ld",
+                 (long)status_task_result);
+    }
 
     /* 按键：Boot 键（GPIO0=CONFIG）按住说话、双击触发 BLE 扫描（P2）。
      * 复位用硬件 Reset 键（无需软件处理）。 */
@@ -804,9 +1029,31 @@ void app_main(void)
         ESP_LOGE(TAG, "BLE central init FAILED rc=%d", ble_ret);
     }
 
-    /* 对话任务：独立任务跑 talk_task，播放可被按键打断（app_main 主任务返回） */
-    xTaskCreate(talk_task, "talk", 8192, NULL, 5, NULL);
+    /* NimBLE 先保留内部内存；后台上传栈已放入 PSRAM，再创建语音关键任务。 */
+    ESP_LOGI(TAG, "before voice tasks: internal_free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(
+                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    BaseType_t talk_task_result = xTaskCreate(
+        talk_task, "talk", TALK_TASK_STACK_SIZE, NULL, 5, &s_talk_task_handle);
+    if (talk_task_result != pdPASS) {
+        ESP_LOGE(TAG, "talk task create FAILED rc=%ld", (long)talk_task_result);
+    }
 
-    /* P4：预警空闲轮询任务（30s/次，不打断对话，独立于语音首字路径） */
-    xTaskCreate(alert_poll_task, "alert_poll", 4096, NULL, 4, NULL);
+    BaseType_t capture_task_result = xTaskCreate(
+        capture_task, "capture", CAPTURE_TASK_STACK_SIZE, NULL, 6,
+        &s_capture_task_handle);
+    if (capture_task_result != pdPASS) {
+        ESP_LOGE(TAG, "capture task create FAILED rc=%ld",
+                 (long)capture_task_result);
+    }
+
+    /* P4：低优先级预警轮询不在首字路径，其栈使用 PSRAM，保留关键任务内部栈。 */
+    BaseType_t alert_task_result = xTaskCreateWithCaps(
+        alert_poll_task, "alert_poll", 4096, NULL, 4, NULL,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (alert_task_result != pdPASS) {
+        ESP_LOGE(TAG, "alert task create FAILED rc=%ld",
+                 (long)alert_task_result);
+    }
 }

@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy this file to voice_agent.local.json and fill values locally. Never commit the local file.",
+  "wifi": [
+    {
+      "ssid": "",
+      "password": "",
+      "priority": 1,
+      "auth_type": 0
+    }
+  ],
+  "device_token": "",
+  "_field_notes": {
+    "ssid": "1-32 UTF-8 bytes",
+    "password": "0-64 UTF-8 bytes",
+    "priority": "0-255; lower values are preferred",
+    "auth_type": "0-255; firmware-defined authentication type",
+    "device_token": "Non-empty device authentication token"
+  }
+}

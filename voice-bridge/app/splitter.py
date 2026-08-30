@@ -67,7 +67,6 @@ class SentenceBuffer:
 
     def feed(self, text: str) -> list[str]:
         """喂入一段字符流，返回其中新产出的完整句子。"""
-        text = clean_markdown(text)  # 剥离 markdown 标记，防 TTS 念"星号星号"
         out: list[str] = []
         for ch in text:
             # 判定上一个 "."：后面是数字→小数点（不拆）；否则→句号（拆）

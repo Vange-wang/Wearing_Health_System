@@ -1,7 +1,7 @@
 """请求/响应模型（Spec §5）。"""
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 
 class TTSHealth(BaseModel):
@@ -20,8 +20,32 @@ class HealthResponse(BaseModel):
     tts: TTSHealth
     vad: str           # "enabled" | "disabled"
     llm: str           # v0.3：LLM 后端名（"hermes" | "unavailable"），如实上报
+    device_auth: str   # "ok" | "degraded" | "unavailable"，不含配置细节
 
 
 class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
+
+
+class HealthDataIn(BaseModel):
+    """Validated BOX-3 health frame projected from the BLE combined frame."""
+
+    hr: float | None = Field(default=None, ge=20, le=250)
+    spo2: float | None = Field(default=None, ge=50, le=100)
+    seq: int | None = Field(default=None, ge=0, le=255)
+    flags: int | None = Field(default=None, ge=0, le=255)
+    quality: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_validity_flags(self):
+        if self.flags is None:
+            self.flags = (0x01 if self.hr is not None else 0) | (
+                0x02 if self.spo2 is not None else 0
+            )
+            return self
+        if bool(self.flags & 0x01) != (self.hr is not None):
+            raise ValueError("hr must match flags bit 0")
+        if bool(self.flags & 0x02) != (self.spo2 is not None):
+            raise ValueError("spo2 must match flags bit 1")
+        return self

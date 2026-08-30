@@ -48,3 +48,41 @@ def test_load_recent_aligns_to_newline(tmp_path):
     out = c.load_recent()
     # 结果应以换行开头（对齐到条目边界），或至少不包含半截（此处宽松断言：以条目内容开头）
     assert "第1条内容" in out
+
+
+def test_large_memory_uses_bounded_seek_from_eof(monkeypatch, tmp_path):
+    content = "".join(f"第{i:05d}条：长期记忆内容\n" for i in range(20_000)).encode("utf-8")
+    c = _client(tmp_path, content, budget=512)
+    real = c.memory_file_path.open("rb")
+
+    class RecordingFile:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+            self.read_sizes = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.wrapped.close()
+
+        def seek(self, *args):
+            return self.wrapped.seek(*args)
+
+        def tell(self):
+            return self.wrapped.tell()
+
+        def read(self, size=-1):
+            self.read_sizes.append(size)
+            return self.wrapped.read(size)
+
+    recording = RecordingFile(real)
+    monkeypatch.setattr(c, "_open_memory_file", lambda: recording, raising=False)
+
+    out = c.load_recent()
+
+    assert recording.read_sizes
+    assert all(0 <= size <= 512 + 256 for size in recording.read_sizes)
+    assert len(out.encode("utf-8")) <= 512
+    assert "\ufffd" not in out
+    assert out.startswith("第")

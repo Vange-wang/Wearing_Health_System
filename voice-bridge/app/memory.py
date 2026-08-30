@@ -31,6 +31,9 @@ class MemoryClient:
 
     # ---------------- 注入（读）：本地文件，零网络 ----------------
 
+    def _open_memory_file(self):
+        return self.memory_file_path.open("rb")
+
     def load_recent(self) -> str:
         """读取 MEMORY.md 最近部分（≤ inject_budget 字节），供注入。
 
@@ -40,17 +43,33 @@ class MemoryClient:
         try:
             if not self.memory_file_path.exists():
                 return ""
-            raw = self.memory_file_path.read_bytes()
-            if not raw:
-                return ""
-            if len(raw) <= self.inject_budget:
-                return raw.decode("utf-8", errors="replace").strip()
-            # 取尾部预算窗口，并前移到最近的换行，避免从半条截断
-            tail = raw[-self.inject_budget:]
-            nl = tail.find(b"\n")
-            if nl > 0 and nl < _TAIL_SAFE_MARGIN:
-                tail = tail[nl + 1:]
-            return tail.decode("utf-8", errors="replace").strip()
+            with self._open_memory_file() as memory_file:
+                memory_file.seek(0, 2)
+                size = memory_file.tell()
+                if size <= 0:
+                    return ""
+                window = min(size, self.inject_budget + _TAIL_SAFE_MARGIN)
+                memory_file.seek(size - window)
+                raw = memory_file.read(window)
+
+            if size <= self.inject_budget:
+                tail = raw
+            else:
+                tail = raw[-self.inject_budget:]
+                # Prefer a complete line within the exact injection budget.
+                newline = tail.find(b"\n")
+                if newline >= 0:
+                    tail = tail[newline + 1:]
+
+            # A single line may exceed the budget. Drop at most the split UTF-8
+            # prefix rather than inserting replacement characters into memory.
+            for prefix in range(min(4, len(tail) + 1)):
+                try:
+                    return tail[prefix:].decode("utf-8").strip()
+                except UnicodeDecodeError as exc:
+                    if exc.start > 3:
+                        return ""
+            return ""
         except Exception:
             return ""
 

@@ -1,7 +1,11 @@
 idf_component_register(
     SRCS
         "voice_agent.c"
+        "audio_session.c"
+        "wav_stream.c"
         "ble_central.c"
+        "credential_store.c"
+        "device_auth_client.c"
     INCLUDE_DIRS
         "")
 

@@ -12,6 +12,12 @@ typedef struct {
 
 /* 喂原始样本（采样任务调用，速率按实测自适应，克隆芯片寄存器表可能不准） */
 void hr_spo2_push(uint32_t ir, uint32_t red);
+void hr_spo2_invalidate_window(void);
 
 /* 用最近 10s 滑动窗口计算（5s 上报任务调用） */
 hr_spo2_result_t hr_spo2_compute(void);
+
+#ifdef WRIST_SELF_TEST
+void hr_spo2_test_reset(void);
+void hr_spo2_test_push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us);
+#endif

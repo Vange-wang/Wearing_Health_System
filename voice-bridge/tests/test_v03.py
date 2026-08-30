@@ -47,6 +47,7 @@ def make_speech_wav(seconds: float = 1.0, rate: int = 16000) -> bytes:
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app) as c:
+        c.headers.update({"X-Device-Token": app.state.device_auth.token})
         yield c
 
 

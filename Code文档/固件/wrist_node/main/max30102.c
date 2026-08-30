@@ -1,4 +1,5 @@
 #include "max30102.h"
+#include <stdbool.h>
 #include <string.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -39,14 +40,35 @@ static const char *TAG = "max30102";
  * 0.45s 峰间距仍漏 0.5-0.6s 次峰 → HR 高估（104-120 vs 真实 78）。
  * 4.6mA irAC~500：SNR 足够且切迹弱，锁定值与血氧仪吻合（63-82）。 */
 #define LED_CURRENT       0x17
+#define FIFO_CONFIG_VALUE 0x0F
+#define SPO2_CONFIG_VALUE 0x26
+#define MLED_CTRL1_VALUE  0x21
+#define SPO2_MODE_VALUE   0x03
+#define RESET_VALUE       0x40
 
 /* 连续失败超过该次数（≈1 秒）判定总线卡死，触发恢复 */
 #define I2C_FAIL_RECOVER  100
 
 static uint8_t s_part_id = 0;
 static int s_consec_fails = 0;
+static max30102_stats_t s_stats;
+static bool s_window_invalidated;
 
 static esp_err_t read_regs(uint8_t reg, uint8_t *buf, size_t len);
+typedef esp_err_t (*register_writer_fn)(uint8_t reg, uint8_t value);
+typedef esp_err_t (*register_reader_fn)(uint8_t reg, uint8_t *buf, size_t len);
+
+static esp_err_t record_transaction(bool ok)
+{
+    if (ok) {
+        s_consec_fails = 0;
+    } else {
+        ++s_consec_fails;
+        ++s_stats.transaction_errors;
+    }
+    s_stats.consecutive_failures = (uint32_t)s_consec_fails;
+    return ok ? ESP_OK : ESP_FAIL;
+}
 
 /* ================= 软件 I2C（bit-bang ~100kHz） =================
  * 原因：MAX30102 在采样窗口会 NACK，且被中断的多字节读会卡死 SCL。
@@ -150,10 +172,7 @@ static esp_err_t write_reg(uint8_t reg, uint8_t val)
     if (ok) ok = i2c_write_byte(reg);
     if (ok) ok = i2c_write_byte(val);
     i2c_stop();
-    if (!ok) {
-        s_consec_fails++;
-    }
-    return ok ? ESP_OK : ESP_FAIL;
+    return record_transaction(ok);
 }
 
 static esp_err_t read_reg(uint8_t reg, uint8_t *val)
@@ -177,40 +196,92 @@ static esp_err_t read_regs(uint8_t reg, uint8_t *buf, size_t len)
         }
     }
     i2c_stop();
-    if (ok) {
-        s_consec_fails = 0;
-    } else {
-        s_consec_fails++;
-    }
-    return ok ? ESP_OK : ESP_FAIL;
+    return record_transaction(ok);
 }
 
-/* 总线解锁：SCL 打 10 个脉冲复位从设备状态机（GPIO 始终在手，无需动驱动） */
-static void bus_recovery(void)
+static esp_err_t configure_sensor(register_writer_fn writer)
 {
-    ESP_LOGW(TAG, "I2C 连续失败 %d 次，SCL 打脉冲解锁 + 传感器软复位", s_consec_fails);
-    for (int i = 0; i < 10; i++) {
-        scl_low();
-        ets_delay_us(5);
-        scl_high();
-        ets_delay_us(5);
+    if (writer == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    i2c_stop();
+    esp_err_t err;
+    if ((err = writer(REG_FIFO_CONFIG, FIFO_CONFIG_VALUE)) != ESP_OK) return err;
+    if ((err = writer(REG_SPO2_CONFIG, SPO2_CONFIG_VALUE)) != ESP_OK) return err;
+    if ((err = writer(REG_LED1_PA, LED_CURRENT)) != ESP_OK) return err;
+    if ((err = writer(REG_LED2_PA, LED_CURRENT)) != ESP_OK) return err;
+    if ((err = writer(REG_MLED_CTRL1, MLED_CTRL1_VALUE)) != ESP_OK) return err;
+    if ((err = writer(REG_INTR_ENABLE_1, 0x00)) != ESP_OK) return err;
+    if ((err = writer(REG_INTR_ENABLE_2, 0x00)) != ESP_OK) return err;
+    return writer(REG_MODE_CONFIG, SPO2_MODE_VALUE);
+}
 
-    /* 软复位 + 重写全部配置 */
-    write_reg(REG_MODE_CONFIG, 0x40);
-    vTaskDelay(pdMS_TO_TICKS(20));
-    write_reg(REG_FIFO_CONFIG, 0x0F);
-    write_reg(REG_SPO2_CONFIG, 0x26);      /* 100Hz/215µs/4096nA */
-    write_reg(REG_LED1_PA, LED_CURRENT);
-    write_reg(REG_LED2_PA, LED_CURRENT);
-    write_reg(REG_MLED_CTRL1, 0x21);
-    write_reg(REG_INTR_ENABLE_1, 0x00);
-    write_reg(REG_INTR_ENABLE_2, 0x00);
-    write_reg(REG_MODE_CONFIG, 0x03);
+static esp_err_t clear_fifo(register_writer_fn writer)
+{
+    esp_err_t err;
+    if ((err = writer(REG_FIFO_WR_PTR, 0x00)) != ESP_OK) return err;
+    if ((err = writer(REG_OVF_COUNTER, 0x00)) != ESP_OK) return err;
+    return writer(REG_FIFO_RD_PTR, 0x00);
+}
 
+static esp_err_t recover_with_writer(register_writer_fn writer, bool pulse_bus)
+{
+    ++s_stats.recovery_attempts;
+    if (pulse_bus) {
+        ESP_LOGW(TAG, "I2C 连续失败 %d 次，尝试总线恢复", s_consec_fails);
+        for (int i = 0; i < 10; ++i) {
+            scl_low();
+            ets_delay_us(5);
+            scl_high();
+            ets_delay_us(5);
+        }
+        i2c_stop();
+    }
+
+    esp_err_t err = writer(REG_MODE_CONFIG, RESET_VALUE);
+    if (err == ESP_OK && pulse_bus) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (err == ESP_OK) {
+        err = configure_sensor(writer);
+    }
+    if (err == ESP_OK) {
+        err = clear_fifo(writer);
+    }
+    if (err != ESP_OK) {
+        ++s_stats.recovery_failures;
+        ESP_LOGE(TAG, "总线恢复失败");
+        return err;
+    }
     s_consec_fails = 0;
+    s_stats.consecutive_failures = 0;
     ESP_LOGW(TAG, "总线恢复完成");
+    return ESP_OK;
+}
+
+esp_err_t max30102_recover(void)
+{
+    return recover_with_writer(write_reg, true);
+}
+
+static esp_err_t handle_fifo_overflow(uint8_t overflow,
+                                      register_reader_fn reader,
+                                      register_writer_fn writer)
+{
+    if (overflow == 0) {
+        return ESP_OK;
+    }
+    ++s_stats.fifo_overflows;
+    s_window_invalidated = true;
+    /* A complete FIFO pop advances RD_PTR and resets the saturated overflow
+     * counter.  Do this before pointer clearing so overflow recovery cannot
+     * deadlock on modules that ignore direct OVF_COUNTER writes while full. */
+    uint8_t discarded_sample[6];
+    esp_err_t err = reader(REG_FIFO_DATA, discarded_sample,
+                           sizeof(discarded_sample));
+    if (err != ESP_OK) {
+        return err;
+    }
+    return clear_fifo(writer);
 }
 
 esp_err_t max30102_init(void)
@@ -225,7 +296,10 @@ esp_err_t max30102_init(void)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&io);
+    esp_err_t err = gpio_config(&io);
+    if (err != ESP_OK) {
+        return err;
+    }
     /* 关键 1：gpio_config 后输出锁存默认 0，开漏输出会把 SDA/SCL 主动拉低——
      * 必须立即置高释放总线（空闲电平恢复上拉） */
     sda_high();
@@ -236,7 +310,10 @@ esp_err_t max30102_init(void)
     gpio_ll_input_enable(&GPIO, PIN_SCL);
 
     /* 上电复位 */
-    write_reg(REG_MODE_CONFIG, 0x40);
+    err = write_reg(REG_MODE_CONFIG, RESET_VALUE);
+    if (err != ESP_OK) {
+        return err;
+    }
     vTaskDelay(pdMS_TO_TICKS(20));
 
     /* 芯片 ID 校验 */
@@ -245,32 +322,13 @@ esp_err_t max30102_init(void)
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    /* ---- 配置顺序：先全部配好，最后写 MODE 启动采样 ---- */
-    write_reg(REG_FIFO_CONFIG, 0x0F);      /* 采样平均关闭、滚动关闭、满水位 15 */
-    write_reg(REG_SPO2_CONFIG, 0x26);      /* 4096nA、100Hz、脉宽 215µs */
-    write_reg(REG_LED1_PA, LED_CURRENT);
-    write_reg(REG_LED2_PA, LED_CURRENT);
-    write_reg(REG_MLED_CTRL1, 0x21);       /* 关键：SLOT1=RED、SLOT2=IR，不复位不采样 */
-    write_reg(REG_INTR_ENABLE_1, 0x00);
-    write_reg(REG_INTR_ENABLE_2, 0x00);
-    write_reg(REG_MODE_CONFIG, 0x03);      /* 启动 SpO2 模式 */
-
-    /* 清 FIFO：读指针只能靠读 FIFO_DATA 自动推进，读空为止 */
-    uint8_t drain[6];
-    int drain_count = 0;
-    while (drain_count < 32) {
-        uint8_t rd = 0, wr = 0;
-        if (read_reg(REG_FIFO_RD_PTR, &rd) != ESP_OK ||
-            read_reg(REG_FIFO_WR_PTR, &wr) != ESP_OK) {
-            break;
-        }
-        if (((wr - rd) & 0x1F) == 0) {
-            break;
-        }
-        if (read_regs(REG_FIFO_DATA, drain, sizeof(drain)) != ESP_OK) {
-            break;
-        }
-        drain_count++;
+    err = configure_sensor(write_reg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = clear_fifo(write_reg);
+    if (err != ESP_OK) {
+        return err;
     }
 
     s_consec_fails = 0;
@@ -286,9 +344,25 @@ uint8_t max30102_get_part_id(void)
 
 int max30102_read_fifo(max30102_sample_t *out, int max_samples)
 {
+    if (out == NULL || max_samples <= 0) {
+        return 0;
+    }
     /* 连续失败判定总线卡死 → 恢复 */
     if (s_consec_fails >= I2C_FAIL_RECOVER) {
-        bus_recovery();
+        (void)max30102_recover();
+        return 0;
+    }
+
+    uint8_t overflow = 0;
+    if (read_reg(REG_OVF_COUNTER, &overflow) != ESP_OK) {
+        return 0;
+    }
+    if (overflow != 0) {
+        ESP_LOGW(TAG, "FIFO overflow count=%u; discarding contaminated window",
+                 overflow & 0x1F);
+        if (handle_fifo_overflow(overflow, read_regs, write_reg) != ESP_OK) {
+            ESP_LOGE(TAG, "FIFO overflow clear failed");
+        }
         return 0;
     }
 
@@ -321,3 +395,88 @@ int max30102_read_fifo(max30102_sample_t *out, int max_samples)
     /* 读指针随读 FIFO_DATA 自动推进，无需（也不能）写 RD_PTR */
     return avail;
 }
+
+void max30102_get_stats(max30102_stats_t *out)
+{
+    if (out != NULL) {
+        *out = s_stats;
+        out->consecutive_failures = (uint32_t)s_consec_fails;
+    }
+}
+
+bool max30102_take_window_invalidated(void)
+{
+    bool invalidated = s_window_invalidated;
+    s_window_invalidated = false;
+    return invalidated;
+}
+
+#ifdef MAX30102_SELF_TEST
+static int s_test_write_call;
+static int s_test_fail_call;
+static int s_test_read_call;
+static uint8_t s_test_read_reg;
+static size_t s_test_read_len;
+
+static esp_err_t selftest_writer(uint8_t reg, uint8_t value)
+{
+    (void)reg;
+    (void)value;
+    ++s_test_write_call;
+    return s_test_write_call == s_test_fail_call ? ESP_FAIL : ESP_OK;
+}
+
+static esp_err_t selftest_reader(uint8_t reg, uint8_t *buf, size_t len)
+{
+    s_test_read_call++;
+    s_test_read_reg = reg;
+    s_test_read_len = len;
+    memset(buf, 0, len);
+    return ESP_OK;
+}
+
+esp_err_t max30102_fault_injection_selftest(void)
+{
+    memset(&s_stats, 0, sizeof(s_stats));
+    s_consec_fails = 0;
+    s_window_invalidated = false;
+
+    s_test_write_call = 0;
+    s_test_fail_call = 2;
+    if (configure_sensor(selftest_writer) == ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    s_test_write_call = 0;
+    s_test_fail_call = 1;
+    if (recover_with_writer(selftest_writer, false) == ESP_OK ||
+        s_stats.recovery_failures != 1) {
+        return ESP_FAIL;
+    }
+
+    s_test_write_call = 0;
+    s_test_fail_call = -1;
+    s_test_read_call = 0;
+    s_test_read_reg = 0;
+    s_test_read_len = 0;
+    if (handle_fifo_overflow(1, selftest_reader, selftest_writer) != ESP_OK ||
+        s_test_read_call != 1 ||
+        s_test_read_reg != REG_FIFO_DATA ||
+        s_test_read_len != 6 ||
+        s_stats.fifo_overflows != 1 ||
+        !max30102_take_window_invalidated() ||
+        max30102_take_window_invalidated()) {
+        return ESP_FAIL;
+    }
+
+    s_consec_fails = 2;
+    (void)record_transaction(true);
+    if (s_consec_fails != 0 || s_stats.consecutive_failures != 0) {
+        return ESP_FAIL;
+    }
+    memset(&s_stats, 0, sizeof(s_stats));
+    s_consec_fails = 0;
+    s_window_invalidated = false;
+    return ESP_OK;
+}
+#endif

@@ -1,6 +1,9 @@
 server:
   host: 0.0.0.0
   port: 8710
+device_auth:
+  mode: required
+  token_env: DEVICE_TOKEN
 asr:
   model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
   sample_rate: 16000
@@ -42,6 +45,7 @@ router:
 pipeline:
   sentence_max_chars: 50
   max_frame_bytes: 8388608
+  stream_idle_timeout_seconds: 5
   comfort_text: 好的，我查一下。
   sentence_gap_ms: 300
   acknowledgements:
@@ -57,7 +61,8 @@ health:
   alert_cooldown_s: 600
   data_stale_seconds: 60
   # P4 微信预警推送：接收方为子女/监护人微信（hermes send -t weixin:<chat_id>）
-  wechat_chat_id: o9cq803xoWnMDS1napPGMzBmd3vs@im.wechat
+  wechat_chat_id: ""  # local env only
+  wechat_chat_id_env: WECHAT_CHAT_ID
   wechat_push_enabled: true
   wechat_daily_limit: 5
 log:

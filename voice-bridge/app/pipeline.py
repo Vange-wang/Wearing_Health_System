@@ -10,6 +10,7 @@ import logging
 import random
 import struct
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,47 @@ from .tts import TTSError
 from .router import HERMES, LIGHTWEIGHT, RAG, DATA
 
 logger = logging.getLogger("voice-bridge.pipeline")
+
+
+def _timing_defaults() -> dict:
+    return {
+        "asr_ms": None,
+        "llm_ttft_ms": None,
+        "llm_total_ms": None,
+        "tts_first_ms": None,
+        "tts_total_ms": None,
+        "sentence_count": 0,
+        "chunk_count": 0,
+        "llm_backend": "unknown",
+        "tool_seen": False,
+        "tool_ms": 0,
+        "comfort_sent": False,
+        "route": HERMES,
+        "first_frame_ready_ms": None,
+        "service_write_ms": None,
+    }
+
+
+@dataclass
+class TimingRecord:
+    """Mutable timing state owned by exactly one request."""
+
+    _values: dict = field(default_factory=_timing_defaults)
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def __setitem__(self, key, value):
+        self._values[key] = value
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+    def items(self):
+        return self._values.items()
+
+    def as_dict(self) -> dict:
+        return self._values
 
 
 class NoSpeechError(Exception):
@@ -69,6 +111,7 @@ class StreamingPipeline:
         acknowledgements: dict | None = None,
         health=None,
         data_stale_seconds: float = 300,
+        tts_workers: int = 8,
     ):
         self.asr = asr
         self.llm = llm          # 慢路径 Hermes
@@ -86,27 +129,22 @@ class StreamingPipeline:
         # BLE 健康数据（P3 DATA 路由模板直答）：HealthDataStore + 新鲜度阈值
         self.health = health
         self.data_stale_seconds = float(data_stale_seconds)
+        self.tts_workers = int(tts_workers)
+        if not 1 <= self.tts_workers <= 16:
+            raise ValueError("tts_workers must be between 1 and 16")
         # 慢路径安抚语池（预合成 WAV，query 池随机轮换）。快路径 ack 已删除（首字达标后不需要）。
         self.acknowledgements = acknowledgements or {}
         self._last_ack_idx: dict = {}
+        # Backward-compatible snapshot for direct callers that do not supply a
+        # request record. HTTP routes always pass their own TimingRecord.
         self.timing: dict = {}
 
-    def _init_timing(self):
-        self.timing = {
-            "asr_ms": None,
-            "llm_ttft_ms": None,
-            "llm_total_ms": None,
-            "tts_first_ms": None,
-            "tts_total_ms": None,
-            "sentence_count": 0,
-            "chunk_count": 0,
-            # v0.3 分段计量 + 长期 RAG 路由（Spec §3/§4）
-            "llm_backend": getattr(self.llm, "name", "unknown"),
-            "tool_seen": False,
-            "tool_ms": 0,
-            "comfort_sent": False,
-            "route": HERMES,
-        }
+    def _prepare_timing(self, timing: TimingRecord | None) -> TimingRecord:
+        record = timing or TimingRecord()
+        record["llm_backend"] = getattr(self.llm, "name", "unknown")
+        if timing is None:
+            self.timing = record.as_dict()
+        return record
 
     def _pick_ack(self, text: str) -> bytes | None:
         """慢路径安抚语：从 query 池随机轮换（避免连续重复）。
@@ -135,8 +173,8 @@ class StreamingPipeline:
             return "血压功能还没有接入，心率和血氧可以查看。"
         if self.health is None:
             return "健康数据功能正在准备中，接入后就能帮你看了。"
-        hr, spo2, age = self.health.get_latest()
-        if age is None or age > self.data_stale_seconds:
+        hr, spo2 = self.health.get_fresh_values(self.data_stale_seconds)
+        if hr is None and spo2 is None:
             return "健康数据检测暂时中断了，请检查腕带是否佩戴好。"
         parts = []
         if hr is not None:
@@ -155,9 +193,11 @@ class StreamingPipeline:
             return "健康数据检测暂时中断了，请检查腕带是否佩戴好。"
         return "您当前" + "，".join(parts) + "。"
 
-    async def run(self, samples: np.ndarray, wav_path: Path):
+    async def run(
+        self, samples: np.ndarray, wav_path: Path, timing: TimingRecord | None = None
+    ):
         """批式路径（v0.2/v0.3 兼容）：VAD → 批式 ASR(SenseVoice) → 下游。"""
-        self._init_timing()
+        timing = self._prepare_timing(timing)
 
         # 1. VAD
         if not self.vad.is_speech(samples):
@@ -165,23 +205,23 @@ class StreamingPipeline:
 
         # 2. ASR（批式）
         t = time.perf_counter()
-        text = self.asr.transcribe(wav_path)
-        self.timing["asr_ms"] = round((time.perf_counter() - t) * 1000)
+        text = await asyncio.to_thread(self.asr.transcribe, wav_path)
+        timing["asr_ms"] = round((time.perf_counter() - t) * 1000)
         if not text:
             raise NoSpeechError("ASR 未识别出有效语音")
 
-        async for frame in self._stream_from_text(text):
+        async for frame in self._stream_from_text(text, timing):
             yield frame
 
-    async def run_text(self, text: str):
+    async def run_text(self, text: str, timing: TimingRecord | None = None):
         """流式路径（v0.4 A2）：text 已由流式 ASR 给出，直接走下游（路由/LLM/TTS/帧）。"""
-        self._init_timing()
+        timing = self._prepare_timing(timing)
         if not text:
             raise NoSpeechError("流式 ASR 未识别出有效语音")
-        async for frame in self._stream_from_text(text):
+        async for frame in self._stream_from_text(text, timing):
             yield frame
 
-    async def _stream_from_text(self, text: str):
+    async def _stream_from_text(self, text: str, timing: TimingRecord):
         """text → 路由（轻量/RAG/Hermes）→ LLM 流 → 分句 → TTS → 长度前缀帧。"""
         # ASR 近音词归一（血氧 → 血阳/学养/学样 同音误识别），路由前应用
         if self.router is not None:
@@ -191,17 +231,17 @@ class StreamingPipeline:
         if self.rag is not None:
             rag_results = self.rag.search(text, top_k=self.rag_top_k, score_threshold=self.rag_score_threshold)
         route = self.router.route(text, bool(rag_results)) if self.router else HERMES
-        self.timing["route"] = route
+        timing["route"] = route
 
         if route == DATA:
             # P3 模板直答：不经 LLM，直接构造回答文本（确定性，防 LLM 读错数/编数，Spec §4.1）
             selected_llm = None
             final_text = self._build_health_reply(text)
-            self.timing["llm_backend"] = "template"
+            timing["llm_backend"] = "template"
         elif route == HERMES:
             selected_llm = self.llm
             final_text = text
-            self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
+            timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
         else:
             selected_llm = self.lightweight_llm if self.lightweight_llm is not None else self.llm
             final_text = text
@@ -210,7 +250,7 @@ class StreamingPipeline:
                     f"- {r['doc']['title']}: {r['doc']['text']}" for r in rag_results
                 )
                 final_text = f"【知识库参考，仅据以下内容回答】\n{ctx}\n\n用户问题：{text}"
-            self.timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
+            timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
 
         # 方向1：快路径路由判定后立即预建 edge 连接（与 LLM 首句生成并行，省 ~0.65s 建连）。
         # 慢路径（Hermes）首句 >2s 才到，预连接会空闲恶化（C3 实测 2s 空闲净等待反而变慢），
@@ -239,14 +279,14 @@ class StreamingPipeline:
             delta_iter = iter([final_text])
         else:
             try:
-                delta_iter = selected_llm.stream_chat(final_text)
+                delta_iter = await asyncio.to_thread(selected_llm.stream_chat, final_text)
             except LLMError as e:
                 if selected_llm is not self.llm:
                     logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
-                    self.timing["route"] = HERMES
-                    self.timing["llm_backend"] = getattr(self.llm, "name", "unknown")
+                    timing["route"] = HERMES
+                    timing["llm_backend"] = getattr(self.llm, "name", "unknown")
                     selected_llm = self.llm  # 需求3：更新实际后端，避免误判提取
-                    delta_iter = self.llm.stream_chat(text)
+                    delta_iter = await asyncio.to_thread(self.llm.stream_chat, text)
                     # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
                     if preconn_state is not None:
                         preconn_state["disabled"] = True
@@ -256,7 +296,7 @@ class StreamingPipeline:
         # 预合成流水线（并发 worker + 序号重排）：
         # produce(LLM 分句) → tts_queue → N worker 并发 TTS → frame_queue → 按序发帧
         # 并发合成：edge 每句独立连接可并发（8 句 2.2s 实测稳定）；序号重排保证句子顺序
-        N_WORKERS = 8
+        worker_count = self.tts_workers
         tts_queue: asyncio.Queue = asyncio.Queue()
         frame_queue: asyncio.Queue = asyncio.Queue()
         tts_first_recorded = False
@@ -290,7 +330,7 @@ class StreamingPipeline:
             try:
                 async for seg_wav in seg_iter:
                     if not tts_first_recorded:
-                        self.timing["tts_first_ms"] = round((time.perf_counter() - t0) * 1000)
+                        timing["tts_first_ms"] = round((time.perf_counter() - t0) * 1000)
                         tts_first_recorded = True
                     emitted_any = True
                     if last_seg is not None:
@@ -303,51 +343,58 @@ class StreamingPipeline:
 
         async def _worker():
             nonlocal tts_first_recorded, tts_wall_t0
-            while True:
-                item = await tts_queue.get()
-                if item is None:
-                    logger.info("worker: 收到结束哨兵，退出")
-                    break
-                seq, kind, sentence = item
-                logger.info("worker: 取到任务 seq=%s kind=%s 句子=%r", seq, kind, (sentence or '')[:20])
-                t0 = time.perf_counter()
-                if tts_wall_t0 is None:
-                    tts_wall_t0 = t0
-                # 方向1：首个正文句尝试 claim 预连接（快路径已预建）
-                preconn = None
-                if kind == "sentence" and preconn_state is not None:
-                    preconn = await _claim_preconn()
-                # 方案2：优先流式合成（边收边发首帧）；无 stream_synthesize 时回退整句单帧
-                if hasattr(self.tts, "stream_synthesize"):
-                    logger.info("worker: 开始 TTS 合成 seq=%s kind=%s", seq, kind)
-                    # 首句优先用预连接；首段失败（emitted_any=False）回退用时建连重合成
-                    if preconn is not None:
-                        seg_i, last_seg, ok = await _drain_stream(preconn.stream_synthesize(sentence), seq, kind, t0)
-                        await preconn.close()  # 预连接单句用完即关
-                        if not ok:
-                            logger.warning("预连接首句失败，回退用时建连重合成")
-                            seg_i, last_seg, _ = await _drain_stream(self.tts.stream_synthesize(sentence), seq, kind, t0)
-                    else:
-                        seg_i, last_seg, _ = await _drain_stream(self.tts.stream_synthesize(sentence), seq, kind, t0)
-                    logger.info("worker: TTS 合成完成 seq=%s seg_i=%s", seq, seg_i)
-                    # 生成器结束：最后一段标记为句尾发出
-                    if last_seg is not None:
-                        await frame_queue.put(((seq, seg_i), kind, last_seg, True))
-                    else:
-                        await frame_queue.put(((seq, 0), kind, None, True))
-                else:
-                    # 回退：整句合成 → 单帧（句尾）
+            try:
+                while True:
+                    item = await tts_queue.get()
+                    if item is None:
+                        logger.info("worker: 收到结束哨兵，退出")
+                        break
+                    seq, kind, sentence = item
+                    logger.info("worker: 取到任务 seq=%s kind=%s 句子=%r", seq, kind, (sentence or '')[:20])
                     try:
-                        wav = await self.tts.synthesize(sentence)
+                        t0 = time.perf_counter()
+                        if tts_wall_t0 is None:
+                            tts_wall_t0 = t0
+                        preconn = None
+                        if kind == "sentence" and preconn_state is not None:
+                            preconn = await _claim_preconn()
+                        if hasattr(self.tts, "stream_synthesize"):
+                            logger.info("worker: 开始 TTS 合成 seq=%s kind=%s", seq, kind)
+                            if preconn is not None:
+                                seg_i, last_seg, ok = await _drain_stream(
+                                    preconn.stream_synthesize(sentence), seq, kind, t0
+                                )
+                                await preconn.close()
+                                if not ok:
+                                    logger.warning("预连接首句失败，回退用时建连重合成")
+                                    seg_i, last_seg, _ = await _drain_stream(
+                                        self.tts.stream_synthesize(sentence), seq, kind, t0
+                                    )
+                            else:
+                                seg_i, last_seg, _ = await _drain_stream(
+                                    self.tts.stream_synthesize(sentence), seq, kind, t0
+                                )
+                            logger.info("worker: TTS 合成完成 seq=%s seg_i=%s", seq, seg_i)
+                            if last_seg is not None:
+                                await frame_queue.put(((seq, seg_i), kind, last_seg, True))
+                            else:
+                                await frame_queue.put(((seq, 0), kind, None, True))
+                        else:
+                            wav = await self.tts.synthesize(sentence)
+                            dur_ms = (time.perf_counter() - t0) * 1000
+                            if not tts_first_recorded:
+                                timing["tts_first_ms"] = round(dur_ms)
+                                tts_first_recorded = True
+                            await frame_queue.put(((seq, 0), kind, wav, True))
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
-                        logger.error("并发合成 TTS 失败（跳过该句）: %s", e)
+                        # Always complete the claimed sequence so the reorder
+                        # loop can advance instead of waiting forever.
+                        logger.exception("并发合成 TTS 异常（跳过该句）: %s", e)
                         await frame_queue.put(((seq, 0), kind, None, True))
-                        continue
-                    dur_ms = (time.perf_counter() - t0) * 1000
-                    if not tts_first_recorded:
-                        self.timing["tts_first_ms"] = round(dur_ms)
-                        tts_first_recorded = True
-                    await frame_queue.put(((seq, 0), kind, wav, True))
+            finally:
+                await frame_queue.put((None, "worker_done", None, None))
 
         async def _produce():
             nonlocal ttft_done, comfort_queued, total_sentences
@@ -388,7 +435,7 @@ class StreamingPipeline:
                     logger.info("produce: 收到 content 片段 %r", delta[:20])
                     assistant_parts.append(delta)  # 需求3：累积回复全文，回复完成后提取记忆
                     if not ttft_done:
-                        self.timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
+                        timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
                         ttft_done = True
                     for sentence in splitter.feed(delta):
                         await tts_queue.put((seq, "sentence", sentence))
@@ -397,12 +444,15 @@ class StreamingPipeline:
                     await tts_queue.put((seq, "sentence", sentence))
                     seq += 1
             finally:
+                # This is the LLM/template stream completion boundary. It must
+                # not include TTS workers, frame reordering, or sentence gaps.
+                timing["llm_total_ms"] = round((time.perf_counter() - llm_t0) * 1000)
                 total_sentences[0] = seq  # 总句数（含安抚语），供主流程判断结束
-                for _ in range(N_WORKERS):
+                for _ in range(worker_count):
                     await tts_queue.put(None)
-                await frame_queue.put((None, None, None, None))  # 唤醒主流程检查结束
+                await frame_queue.put((None, "producer_done", None, None))
 
-        workers = [asyncio.create_task(_worker()) for _ in range(N_WORKERS)]
+        workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
         producer_task = asyncio.create_task(_produce())
 
         # 主流程：序号重排 + 句间停顿（A6，仅句边界加停顿，句内多帧连续）
@@ -411,13 +461,21 @@ class StreamingPipeline:
         pending: dict = {}
         total_frames = 0
         prev_is_end = True  # 首帧前不加停顿
-        done = False
-        while not done:
+        producer_done = False
+        workers_done = 0
+        while True:
             item = await frame_queue.get()
-            if item[0] is None:  # 结束哨兵（produce 已结束）→ 检查是否所有句已发出
-                logger.info("main: 收到结束哨兵 next_sentence_seq=%s total_sentences=%s", next_sentence_seq, total_sentences[0])
-                if next_sentence_seq >= total_sentences[0]:
-                    done = True
+            if item[0] is None:
+                if item[1] == "producer_done":
+                    producer_done = True
+                elif item[1] == "worker_done":
+                    workers_done += 1
+                if (
+                    producer_done
+                    and workers_done >= worker_count
+                    and next_sentence_seq >= total_sentences[0]
+                ):
+                    break
                 continue
             key, kind, wav, is_end = item
             seq_i, seg_i = key
@@ -429,7 +487,7 @@ class StreamingPipeline:
                     if kind == "comfort":
                         if next_seg == 0:
                             comfort_sent = True
-                            self.timing["comfort_sent"] = True
+                            timing["comfort_sent"] = True
                     else:
                         if next_seg == 0:
                             sentence_count += 1
@@ -445,9 +503,13 @@ class StreamingPipeline:
                     next_seg = 0
                 else:
                     next_seg += 1
-            if total_sentences[0] > 0 and next_sentence_seq >= total_sentences[0]:
+            if (
+                producer_done
+                and workers_done >= worker_count
+                and next_sentence_seq >= total_sentences[0]
+            ):
                 logger.info("main: done, next_sentence_seq=%s total=%s", next_sentence_seq, total_sentences[0])
-                done = True
+                break
 
         await producer_task
         for w in workers:
@@ -471,21 +533,20 @@ class StreamingPipeline:
         if tts_wall_t0 is not None:
             tts_total_ms = (time.perf_counter() - tts_wall_t0) * 1000
 
-        self.timing["llm_total_ms"] = round((time.perf_counter() - llm_t0) * 1000)
-        self.timing["tts_total_ms"] = round(tts_total_ms)
-        self.timing["sentence_count"] = sentence_count
-        self.timing["chunk_count"] = chunk_count
-        self.timing["comfort_sent"] = comfort_sent
+        timing["tts_total_ms"] = round(tts_total_ms)
+        timing["sentence_count"] = sentence_count
+        timing["chunk_count"] = chunk_count
+        timing["comfort_sent"] = comfort_sent
         # 分段计量：工具期 ≈ 请求→首个正文 delta（工具期间无正文）
         stats = getattr(selected_llm, "stats", {}) or {}
         tool_seen = bool(stats.get("tool_seen"))
         first_content_ms = stats.get("first_content_ms")
-        self.timing["tool_seen"] = tool_seen
+        timing["tool_seen"] = tool_seen
         if tool_seen and first_content_ms is not None:
-            self.timing["tool_ms"] = (self.timing["asr_ms"] or 0) + first_content_ms
+            timing["tool_ms"] = (timing["asr_ms"] or 0) + first_content_ms
         else:
-            self.timing["tool_ms"] = 0
+            timing["tool_ms"] = 0
         logger.info(json.dumps({
             "event": "stream_done",
-            **{k: v for k, v in self.timing.items() if v is not None},
+            **{k: v for k, v in timing.items() if v is not None},
         }, ensure_ascii=False))

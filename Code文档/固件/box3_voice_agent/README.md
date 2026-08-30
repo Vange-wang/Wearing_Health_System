@@ -9,11 +9,16 @@ ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-b
 | 项 | 值 |
 |---|---|
 | 主控 | ESP32-S3（BOX-3，16MB Flash + 8MB PSRAM） |
-| 烧录端口 | **COM5**（`python D:\esp-box\build_voice.py`，默认 build 后自动烧录） |
+| 烧录端口 | **COM5**（`python D:\esp-box\build_voice.py` 仅构建；加 `--flash` 才烧录应用和 NVS） |
 | 构建目录 | `build_v1/` |
 | 按键 | Boot（GPIO0）：按住说话 / **双击触发 BLE 首次扫描**；顶部 MUTE（GPIO1）暂未用 |
 
-## 软件架构（本次 P2/P3 新增）
+## 软件架构（2026-08-30 重构后）
+
+- `main/credential_store.c/h` — 从独立 NVS 分区读取 WiFi 条目和设备令牌；源码不含真实凭据。
+- `main/device_auth_client.c/h` — 为健康、告警和语音请求统一加入 `X-Device-Token`，不记录令牌值。
+- `main/audio_session.c/h` — TALK/ALERT 音频仲裁、按下即采集预缓冲和取消状态；不依赖轮询忙等。
+- `main/wav_stream.c/h` — 校验长度前缀 WAV 头并分块送 codec，首帧到达即播放。
 
 - `main/ble_central.c/h` — **BLE central（P2 新增）**：
   - 扫描匹配：名字前缀 `WH-` + 厂商段 0xFFFF 能力位 bit0/bit1（与 P1 `ble_periph.c` 契约对齐）
@@ -27,12 +32,21 @@ ESP32-S3-BOX-3 语音终端固件：v0.4 语音链路（按键说话 → voice-b
   - 独立 `ble_upload` 任务（信号量由 cache_frame 驱动），**不进语音首字路径**（红线满足）
 - **P4 预警空闲轮询播报（`voice_agent.c` alert_poll_task）**：
   - 每 30s（Spec 30~60s）GET `http://voicebridge.local:8710/api/v1/health/alert`，仅当 `s_wifi_up && !s_recording && !s_talk_active` 才轮询——**不打断对话**
-  - 200 → 逐帧解析（长度前缀 WAV，复用语音帧协议）→ play_wav 播放（可被按键打断，`s_cancel` 机制复用）
+  - 200 → 逐帧解析（长度前缀 WAV，复用语音帧协议）→ 完整播放后按 `X-Alert-ID` 调用 ack；被按键取消或连接中断时不 ack，等待租约超时后重投
   - 204/网络失败 → 静默继续；任务优先级 4，独立于语音首字路径
 - `main/voice_agent.c` — v0.4 语音链路 + P2 集成：
   - Boot 双击（BUTTON_DOUBLE_CLICK）触发首次扫描；双击窗口放宽至 500ms（`CONFIG_BUTTON_SHORT_PRESS_TIME_MS=500`，默认 180ms 人手速不够）
   - **300ms 按住守卫**：按住不足 300ms 视为单击/双击手势，不发起对话（防双击触发扫描时产生空 HTTP 请求）
-  - BLE central 初始化在 app_main 尾部（NimBLE 主机任务 + ble_reconn/ble_upload 任务，均独立于语音首字路径）
+  - BLE central 在语音任务创建前初始化，先保留 NimBLE 所需内部 RAM；ble_upload 使用 PSRAM，ble_reconn/ble_upload 均独立于语音首字路径
+
+## 本地 NVS 配置（不含真实值）
+
+1. 复制 `D:\esp-box\voice_agent.local.example.json` 为 Git 忽略的 `D:\esp-box\voice_agent.local.json`。
+2. 仅在本地填写 WiFi 列表和 `device_token`；不要把值写入源码、README、日志或提交。
+3. 执行 `D:\esp-box\build_voice.py` 时会生成 Git 忽略的 `D:\esp-box\build_voice_nvs.bin`。
+4. 执行 `D:\esp-box\build_voice.py --flash` 时，脚本先构建应用，再把应用与 NVS 一并烧录到 COM5。
+
+服务端最终认证模式必须为 `required`；设备健康上报、告警 poll/ack 和原始 PCM 语音流全部携带令牌。缺失/错误令牌的服务端响应分别为 401/403。
 
 ## 关键配置（sdkconfig.defaults 新增）
 
@@ -64,8 +78,17 @@ CONFIG_BUTTON_SHORT_PRESS_TIME_MS=500
 5. ✅ 重启 BOX-3 → NVS MAC 开机直连（无需按键）
 6. ✅ 语音无回归：两次完整对话（HTTP 200，TTS 播放 17 帧）
 
+## 2026-08-30 全链路重构验收
+
+- ✅ ESP-IDF v5.2.7 生产构建与 COM5 应用+NVS 烧录通过；WiFi 凭据和设备令牌只存在于本地配置/NVS。
+- ✅ `required` 认证下，健康、告警和语音三条设备路径均通过；缺失/错误令牌分别为 401/403。
+- ✅ BLE 配对、订阅、断线重连与语音并行通过，联合观测 `lost=0`；BLE 上传任务移至 PSRAM，TALK 任务保留 1628 bytes 高水位余量。
+- ✅ 按键长按使用原始 PCM 分块上传，首音节不丢；服务端返回首个 WAV 帧后立即播放，完整回复无卡顿/漏字。
+- ✅ 固定短语“你好”五轮松键到 codec 首 PCM 中位数为 1484.589 ms，较重构前 1656.169 ms 改善 10.36%。
+- ✅ 告警 TTS 失败、播放取消、连接中断、租约超时重投、ack 幂等、微信失败后重试和成功后计数均有自动化证据。
+
 ## 归档信息
 
-- 归档日期：2026-08-23 · 归档人：zcode
+- 归档日期：2026-08-23（初版）/ 2026-08-30（全链路重构真机验收后同步）· 归档人：zcode / Codex
 - 源目录：`D:\esp-box\examples\voice_agent\`
 - 对应任务单：`协同工作文档/zcode_tasks/2026-08-23-P2-BOX3-BLEcentral-任务单_hm.md`、`2026-08-23-P3-数据流与语音查询-任务单_hm.md`

@@ -16,7 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(BASE_DIR))
 from app.asr import StreamingASR  # noqa: E402
-from app.pipeline import StreamingPipeline, decode_frame  # noqa: E402
+from app.pipeline import StreamingPipeline, TimingRecord, decode_frame  # noqa: E402
 from app.vad import VADGate  # noqa: E402
 from app.asr import ASRBase  # noqa: E402
 from app.tts import TTSBase, wrap_pcm_as_wav  # noqa: E402
@@ -96,6 +96,85 @@ def test_t3_run_text():
     assert len(frames) >= 1
 
 
+def test_two_sequential_requests_keep_independent_timing_records():
+    """A completed request's timing must not be overwritten by the next one."""
+    import asyncio
+
+    class FakeLLM(LLMBase):
+        name = "deepseek"
+
+        def __init__(self):
+            self.stats = {}
+
+        def chat(self, text):
+            return ""
+
+        def stream_chat(self, text):
+            return iter([f"{text}。"])
+
+    class FakeTTS(TTSBase):
+        name = "edge"
+
+        async def synthesize(self, text):
+            return wrap_pcm_as_wav(b"\x00\x00" * 16, 16000)
+
+    p = StreamingPipeline(
+        asr=FakeASR_placeholder(), llm=FakeLLM(), tts=FakeTTS(),
+        vad=VADGate(enabled=False), lightweight_llm=FakeLLM(),
+        router=Router(tool_keywords=[], skill_keywords=[]), rag=None,
+        sentence_gap_ms=0,
+    )
+    first = TimingRecord()
+    second = TimingRecord()
+
+    async def consume(text, timing):
+        return [frame async for frame in p.run_text(text, timing=timing)]
+
+    asyncio.run(consume("第一次", first))
+    first_snapshot = first.as_dict().copy()
+    asyncio.run(consume("第二次", second))
+
+    assert first.as_dict() == first_snapshot
+    assert first is not second
+    assert first.as_dict() is not second.as_dict()
+
+
+def test_llm_total_stops_at_text_stream_completion_not_tts_completion():
+    import asyncio
+
+    class FastLLM(LLMBase):
+        name = "deepseek"
+        stats = {}
+
+        def chat(self, text):
+            return ""
+
+        def stream_chat(self, text):
+            return iter(["回答。"])
+
+    class SlowTTS(TTSBase):
+        name = "edge"
+
+        async def synthesize(self, text):
+            await asyncio.sleep(0.05)
+            return wrap_pcm_as_wav(b"\x00\x00" * 16, 16000)
+
+    p = StreamingPipeline(
+        asr=FakeASR_placeholder(), llm=FastLLM(), tts=SlowTTS(),
+        vad=VADGate(enabled=False), lightweight_llm=FastLLM(),
+        router=Router(tool_keywords=[], skill_keywords=[]), rag=None,
+        sentence_gap_ms=0,
+    )
+    timing = TimingRecord()
+
+    async def consume():
+        return [frame async for frame in p.run_text("问题", timing=timing)]
+
+    asyncio.run(consume())
+    assert timing["llm_total_ms"] < timing["tts_total_ms"]
+    assert timing["tts_total_ms"] >= 40
+
+
 class FakeASR_placeholder(ASRBase):
     def transcribe(self, wav_path):
         return ""
@@ -116,6 +195,7 @@ def test_t2_voice_stream_endpoint():
 
     pcm = wav_pcm(TEST_WAV)
     with TestClient(app) as c:
+        c.headers.update({"X-Device-Token": app.state.device_auth.token})
         r = c.post("/api/v1/voice/stream", content=pcm,
                    headers={"Content-Type": "application/octet-stream"})
     assert r.status_code == 200

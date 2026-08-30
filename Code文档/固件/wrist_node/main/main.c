@@ -19,7 +19,15 @@
 #include "ble_periph.h"
 #include "ws2812.h"
 
+#ifdef WRIST_SELF_TEST
+esp_err_t hr_spo2_selftest(void);
+#endif
+#ifdef MAX30102_SELF_TEST
+esp_err_t max30102_selftest(void);
+#endif
+
 static const char *TAG = "wrist";
+static bool s_led_ready;
 
 #define SAMPLE_TASK_PERIOD_MS 10   /* FIFO 轮询周期（100Hz 采样，10ms 不溢出） */
 #define REPORT_PERIOD_MS      5000 /* 5s/帧 */
@@ -31,6 +39,10 @@ static void sample_task(void *arg)
     int64_t last_log = 0;
     while (1) {
         int n = max30102_read_fifo(samples, sizeof(samples) / sizeof(samples[0]));
+        if (max30102_take_window_invalidated()) {
+            hr_spo2_invalidate_window();
+            ESP_LOGW(TAG, "算法窗口因 FIFO overflow 已作废");
+        }
         total += n;
         for (int i = 0; i < n; i++) {
             hr_spo2_push(samples[i].ir, samples[i].red);
@@ -93,33 +105,64 @@ static void report_task(void *arg)
 
 void app_main(void)
 {
+#ifdef WRIST_SELF_TEST
+    ESP_ERROR_CHECK(hr_spo2_selftest());
+#endif
+#ifdef MAX30102_SELF_TEST
+    ESP_ERROR_CHECK(max30102_selftest());
+#endif
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
+        ret = nvs_flash_erase();
+        if (ret == ESP_OK) {
+            ret = nvs_flash_init();
+        }
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS 初始化失败: %s", esp_err_to_name(ret));
+        return;
     }
 
-    ws2812_init();
-    ws2812_set_rgb(40, 0, 0);
+    ret = ws2812_init();
+    s_led_ready = (ret == ESP_OK);
+    if (s_led_ready) {
+        ws2812_set_rgb(40, 0, 0);
+    } else {
+        ESP_LOGW(TAG, "WS2812 初始化失败，传感与 BLE 继续运行: %s",
+                 esp_err_to_name(ret));
+    }
 
     ret = max30102_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "MAX30102 初始化失败: %s（红灯快闪，每 2s 重试）", esp_err_to_name(ret));
         while (1) {
-            ws2812_set_rgb(120, 0, 0);
+            if (s_led_ready) ws2812_set_rgb(120, 0, 0);
             vTaskDelay(pdMS_TO_TICKS(200));
-            ws2812_set_rgb(0, 0, 0);
+            if (s_led_ready) ws2812_set_rgb(0, 0, 0);
             vTaskDelay(pdMS_TO_TICKS(1800));
-            if (max30102_init() == ESP_OK) {
+            ret = max30102_init();
+            if (ret == ESP_OK) {
                 break;
             }
+            ESP_LOGE(TAG, "MAX30102 重试失败: %s", esp_err_to_name(ret));
         }
     }
 
-    ble_periph_init();
+    esp_err_t ble_ret = ble_periph_init();
+    if (ble_ret != ESP_OK) {
+        ESP_LOGE(TAG, "BLE 初始化失败，进入可见降级状态: %s",
+                 esp_err_to_name(ble_ret));
+    }
     ESP_LOGI(TAG, "腕部节点就绪：广播 %s，5s/帧", "WH-Wrist01");
 
-    xTaskCreate(sample_task, "sample", 4096, NULL, 6, NULL);
-    xTaskCreate(report_task, "report", 4096, NULL, 5, NULL);
-    xTaskCreate(led_task, "led", 3072, NULL, 4, NULL);
+    if (xTaskCreate(sample_task, "sample", 4096, NULL, 6, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "sample task 创建失败");
+    }
+    if (xTaskCreate(report_task, "report", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "report task 创建失败");
+    }
+    if (s_led_ready &&
+        xTaskCreate(led_task, "led", 3072, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "LED task 创建失败，传感与 BLE 继续运行");
+    }
 }

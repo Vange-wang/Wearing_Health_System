@@ -1,293 +1,391 @@
 #include "hr_spo2.h"
+
 #include <math.h>
+#include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
+
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "signal_diag.h"
 
-/* ============================================================
- * HR/SpO2 算法 v2（自相关法，2026-08-23 深夜重写）
- *
- * 替代峰检测法的原因（真机实测证据链）：
- *   - 重搏切迹在峰检测中形成伪周期（HR 65↔172 二选一跳变），需不应期/切迹
- *     窗口等 6 重门限修补，仍反复横跳；
- *   - 自相关对切迹/噪声/节律性伪影天然免疫（离线 6 场景 5 个 ±3 BPM）。
- *
- * 设计：
- *   - 5 秒滑动窗口（样本数 = 5×实测速率，速率自适应）
- *   - HR：IR 通道自相关最强周期 → BPM；清晰度（归一化峰高）门控
- *   - SpO2：自相关峰幅值作 AC（AC²=2·ac[lag]），R 比率 + MAXREFDES117 拟合
- *   - 运动/低置信（清晰度低）：维持上一稳定值 + 伪影位（flags bit2）
- *   - 无手指：全部清空（防隔久复戴报旧值）
- *
- * 注意：ESP32-C3 无 FPU，自相关用 float（软件浮点 ~15-25ms/5s，可接受）。
- * ============================================================ */
-
-/* 窗口时长（秒）：5s 全新窗口（每 5s 上报一帧，无重叠） */
-#define WINDOW_SEC       5.0
-/* 环缓冲容量（上限）：200Hz × 5s = 1000，1024 有余量 */
-#define RING_SIZE        1024
-/* 无手指判据：IR 直流分量低于此值（18-bit ADC） */
-#define DC_MIN_VALID     8000
-/* 心率搜索范围（BPM） */
-#define BPM_MIN          40
-#define BPM_MAX          200
-/* 清晰度门限（归一化自相关峰高，0-1）：
- * 静置干净信号实测 ~0.8；重噪 ~0.4；运动 ~0.2。0.30 以下判低置信 */
-#define CLARITY_VALID    0.30
-/* 输出平滑：最近 3 个有效 BPM 取中位数 */
-#define HR_SMOOTH_N      3
+#define WINDOW_SIZE 1024
+#define WINDOW_SECONDS 10.0
+#define DC_MIN_VALID 8000
+#define PEAK_MIN_DIST_SEC 0.45
+#define PEAK_THR_AC 0.7
+#define QCD_VALID_MAX 0.50
+#define HR_CHANGE_FRAC 0.30
+#define QCD_STRICT 0.10
+#define HR_SMOOTH_N 3
+#define COLD_AGREE_BPM 20
+#define MIN_RATE_HZ 5.0
+#define MAX_RATE_HZ 1000.0
 
 typedef struct {
-    uint32_t ir[RING_SIZE];
-    uint32_t red[RING_SIZE];
-    uint32_t tstamp[RING_SIZE];   /* 入环时间（µs，仅窗口内差分用，回绕无影响） */
+    uint32_t ir[WINDOW_SIZE];
+    uint32_t red[WINDOW_SIZE];
+    uint32_t tstamp[WINDOW_SIZE];
     int head;
     int count;
 } ring_t;
 
 static ring_t s_ring;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-
-static uint16_t s_last_stable_hr = 0;
+static uint16_t s_last_stable_hr;
 static uint16_t s_hr_hist[HR_SMOOTH_N];
-static int s_hr_hist_n = 0;
+static int s_hr_hist_n;
+static uint16_t s_last_ok_bpm;
+static int s_cold_agree;
 
-void hr_spo2_push(uint32_t ir, uint32_t red)
+static void reset_tracking_state(void)
+{
+    s_last_stable_hr = 0;
+    memset(s_hr_hist, 0, sizeof(s_hr_hist));
+    s_hr_hist_n = 0;
+    s_last_ok_bpm = 0;
+    s_cold_agree = 0;
+}
+
+static void push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us)
 {
     portENTER_CRITICAL(&s_mux);
     s_ring.ir[s_ring.head] = ir;
     s_ring.red[s_ring.head] = red;
-    s_ring.tstamp[s_ring.head] = (uint32_t)esp_timer_get_time();
-    s_ring.head = (s_ring.head + 1) % RING_SIZE;
-    if (s_ring.count < RING_SIZE) {
+    s_ring.tstamp[s_ring.head] = timestamp_us;
+    s_ring.head = (s_ring.head + 1) % WINDOW_SIZE;
+    if (s_ring.count < WINDOW_SIZE) {
         s_ring.count++;
     }
     portEXIT_CRITICAL(&s_mux);
 }
 
-/* 自相关求周期：x 先去趋势（一阶差分，滤直流漂移/接触松动电平跳变——实测
- * 0.4s 一次的直流平台跳变会在自相关形成强伪周期 0.2-0.3s，淹没真实心跳峰），
- * 再自相关搜索 [lag_lo, lag_hi] 最强周期。返回 (BPM, 清晰度)。 */
-static void autocorr(const float *x, int n, float rate,
-                     uint16_t *out_bpm, float *out_clarity)
+void hr_spo2_push(uint32_t ir, uint32_t red)
 {
-    *out_bpm = 0;
-    *out_clarity = 0.0f;
-    if (n < 150) {   /* 至少 1.5s（@100Hz） */
-        return;
-    }
-
-    /* 一阶差分（高通）：d[i] = x[i+1] - x[i]，滤直流电平跳变 */
-    static float d[1024];
-    for (int i = 0; i < n - 1; i++) {
-        d[i] = x[i + 1] - x[i];
-    }
-    int m = n - 1;
-
-    /* 去均值 */
-    float mean = 0.0f;
-    for (int i = 0; i < m; i++) {
-        mean += d[i];
-    }
-    mean /= (float)m;
-
-    /* ac[0] 归一化基准 */
-    float ac0 = 0.0f;
-    for (int i = 0; i < m; i++) {
-        float v = d[i] - mean;
-        ac0 += v * v;
-    }
-    if (ac0 < 1e-6f) {
-        return;
-    }
-
-    int lo = (int)(60.0f / (float)BPM_MAX * rate);   /* 200 BPM → 0.30s */
-    int hi = (int)(60.0f / (float)BPM_MIN * rate);   /* 40 BPM → 1.50s */
-    if (lo < 8) lo = 8;
-    if (hi > m / 2) hi = m / 2;
-    if (lo >= hi) {
-        return;
-    }
-
-    float best = -1.0f;
-    int best_lag = lo;
-    for (int lag = lo; lag <= hi; lag++) {
-        float s = 0.0f;
-        for (int i = 0; i + lag < m; i++) {
-            s += (d[i] - mean) * (d[i + lag] - mean);
-        }
-        float v = s / ac0;
-        if (v > best) {
-            best = v;
-            best_lag = lag;
-        }
-    }
-    if (best <= 0.0f) {
-        return;
-    }
-    *out_clarity = best;
-    *out_bpm = (uint16_t)(60.0f * rate / (float)best_lag + 0.5f);
+    push_at(ir, red, (uint32_t)esp_timer_get_time());
 }
 
-/* 自相关峰幅值（作 AC 用）：先一阶差分滤直流电平跳变，再 AC² = 2·mean(s) */
-static float autocorr_ac(const float *x, int n, int lag)
+void hr_spo2_invalidate_window(void)
 {
-    static float d[1024];
-    for (int i = 0; i < n - 1; i++) {
-        d[i] = x[i + 1] - x[i];
-    }
-    int m = n - 1;
-    if (lag >= m) {
+    portENTER_CRITICAL(&s_mux);
+    memset(&s_ring, 0, sizeof(s_ring));
+    reset_tracking_state();
+    portEXIT_CRITICAL(&s_mux);
+}
+
+#ifdef WRIST_SELF_TEST
+void hr_spo2_test_reset(void)
+{
+    hr_spo2_invalidate_window();
+}
+
+void hr_spo2_test_push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us)
+{
+    push_at(ir, red, timestamp_us);
+}
+#endif
+
+static int cmp_u32(const void *a, const void *b)
+{
+    uint32_t x = *(const uint32_t *)a;
+    uint32_t y = *(const uint32_t *)b;
+    return (x > y) - (x < y);
+}
+
+static float periodicity_at_lag(const uint32_t *samples, int n,
+                                double mean, uint32_t lag)
+{
+    if (lag == 0 || lag >= (uint32_t)n) {
         return 0.0f;
     }
-
-    float mean = 0.0f;
-    for (int i = 0; i < m; i++) {
-        mean += d[i];
+    double cross = 0.0;
+    double energy_a = 0.0;
+    double energy_b = 0.0;
+    for (int i = 0; i + (int)lag < n; ++i) {
+        double a = (double)samples[i] - mean;
+        double b = (double)samples[i + lag] - mean;
+        cross += a * b;
+        energy_a += a * a;
+        energy_b += b * b;
     }
-    mean /= (float)m;
-
-    float s = 0.0f;
-    for (int i = 0; i + lag < m; i++) {
-        s += (d[i] - mean) * (d[i + lag] - mean);
-    }
-    if (s <= 0.0f) {
+    if (energy_a <= 0.0 || energy_b <= 0.0) {
         return 0.0f;
     }
-    return sqrtf(2.0f * s / (float)(m - lag));
+    double ratio = cross / sqrt(energy_a * energy_b);
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    return (float)ratio;
+}
+
+static void publish_diag(float rate, double dc_ir, double dc_red,
+                         double ac_ir, double ac_red, float band_ratio,
+                         float quality, uint8_t flags)
+{
+    signal_diag_snapshot_t snapshot = {
+        .rate = rate,
+        .dc_ir = (float)dc_ir,
+        .dc_red = (float)dc_red,
+        .ac_ir = (float)ac_ir,
+        .ac_red = (float)ac_red,
+        .heart_band_ratio = band_ratio,
+        .quality = quality,
+        .flags = flags,
+    };
+    signal_diag_publish(&snapshot);
 }
 
 hr_spo2_result_t hr_spo2_compute(void)
 {
-    hr_spo2_result_t r = { 0, 0, 0, 0 };
+    hr_spo2_result_t result = { 0, 0, 0, 0 };
+    static uint32_t ir[WINDOW_SIZE];
+    static uint32_t red[WINDOW_SIZE];
+    static uint32_t timestamps[WINDOW_SIZE];
+    static double smooth[WINDOW_SIZE];
 
-    /* 快照最近 n 个样本（临界区防采样任务写穿） */
-    static float ir[RING_SIZE];
-    static float red[RING_SIZE];
-    static uint32_t tst[RING_SIZE];
-
-    int n;
+    int available;
     portENTER_CRITICAL(&s_mux);
-    n = s_ring.count;
-    int start = (s_ring.head - n + RING_SIZE) % RING_SIZE;
-    for (int i = 0; i < n; i++) {
-        int idx = (start + i) % RING_SIZE;
-        ir[i] = (float)s_ring.ir[idx];
-        red[i] = (float)s_ring.red[idx];
-        tst[i] = s_ring.tstamp[idx];
+    available = s_ring.count;
+    int start = (s_ring.head - available + WINDOW_SIZE) % WINDOW_SIZE;
+    for (int i = 0; i < available; ++i) {
+        int index = (start + i) % WINDOW_SIZE;
+        ir[i] = s_ring.ir[index];
+        red[i] = s_ring.red[index];
+        timestamps[i] = s_ring.tstamp[index];
     }
     portEXIT_CRITICAL(&s_mux);
 
-    if (n < 150) {
-        return r;
+    if (available < 2) {
+        publish_diag(0.0f, 0.0, 0.0, 0.0, 0.0, 0.0f, 0.0f, 0);
+        return result;
     }
 
-    /* 实测采样率（克隆芯片寄存器表可能与正品不符，必须以实测为准） */
-    float rate = 100.0f;
-    if (n >= 2 && tst[n - 1] > tst[0]) {
-        rate = (float)(n - 1) * 1e6f / (float)(tst[n - 1] - tst[0]);
-        if (rate < 5.0f || rate > 1000.0f) {
-            rate = 100.0f;
+    uint32_t elapsed_us = (uint32_t)(timestamps[available - 1] - timestamps[0]);
+    if (elapsed_us == 0) {
+        result.flags = 0x04;
+        publish_diag(0.0f, 0.0, 0.0, 0.0, 0.0, 0.0f, 0.0f,
+                     result.flags);
+        return result;
+    }
+    double rate = (double)(available - 1) * 1000000.0 / (double)elapsed_us;
+    if (rate < MIN_RATE_HZ || rate > MAX_RATE_HZ) {
+        result.flags = 0x04;
+        publish_diag((float)rate, 0.0, 0.0, 0.0, 0.0, 0.0f, 0.0f,
+                     result.flags);
+        return result;
+    }
+
+    int needed = (int)(WINDOW_SECONDS * rate + 0.5);
+    if (needed < 100 || needed > WINDOW_SIZE || available < needed) {
+        publish_diag((float)rate, 0.0, 0.0, 0.0, 0.0, 0.0f, 0.0f, 0);
+        return result;
+    }
+
+    int offset = available - needed;
+    const uint32_t *window_ir = &ir[offset];
+    const uint32_t *window_red = &red[offset];
+    int n = needed;
+
+    double mean_ir = 0.0;
+    double mean_red = 0.0;
+    for (int i = 0; i < n; ++i) {
+        mean_ir += (double)window_ir[i];
+        mean_red += (double)window_red[i];
+    }
+    mean_ir /= n;
+    mean_red /= n;
+
+    double var_ir = 0.0;
+    double var_red = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double delta = (double)window_ir[i] - mean_ir;
+        var_ir += delta * delta;
+        delta = (double)window_red[i] - mean_red;
+        var_red += delta * delta;
+    }
+    var_ir /= n;
+    var_red /= n;
+    double ac_ir = sqrt(var_ir);
+    double ac_red = sqrt(var_red);
+
+    if (mean_ir < DC_MIN_VALID) {
+        reset_tracking_state();
+        publish_diag((float)rate, mean_ir, mean_red, ac_ir, ac_red,
+                     0.0f, 0.0f, 0);
+        return result;
+    }
+
+    int spo2_valid = 0;
+    double ratio_ir = ac_ir / mean_ir;
+    double ratio_red = ac_red / mean_red;
+    if (ratio_ir > 0.0005 && ratio_red > 0.0005) {
+        double ratio = ratio_red / ratio_ir;
+        if (ratio >= 0.4 && ratio <= 3.0) {
+            double spo2 = -45.060 * ratio * ratio + 30.354 * ratio + 94.845;
+            if (spo2 < 0.0) spo2 = 0.0;
+            if (spo2 > 100.0) spo2 = 100.0;
+            result.spo2 = (uint8_t)(spo2 + 0.5);
+            spo2_valid = 1;
         }
     }
 
-    /* 5 秒窗口（样本数按实测速率） */
-    int wn = (int)(WINDOW_SEC * rate);
-    if (wn > n) wn = n;
-    if (wn > RING_SIZE) wn = RING_SIZE;
-    if (wn < 150) wn = (n < 150) ? n : 150;
-
-    /* DC（窗口内均值） */
-    double mean_ir = 0, mean_red = 0;
-    for (int i = 0; i < wn; i++) {
-        mean_ir += ir[i];
-        mean_red += red[i];
+    for (int i = 0; i < n; ++i) {
+        smooth[i] = (double)window_ir[i];
     }
-    mean_ir /= wn;
-    mean_red /= wn;
-
-    /* 手指在否 */
-    if (mean_ir < DC_MIN_VALID) {
-        s_last_stable_hr = 0;
-        s_hr_hist_n = 0;
-        ESP_LOGW("hr_spo2", "RAW n=%d irDC=%.0f（手指未检测到）", wn, mean_ir);
-        return r;
+    for (int i = 2; i < n - 2; ++i) {
+        smooth[i] = ((double)window_ir[i - 2] + window_ir[i - 1] +
+                     window_ir[i] + window_ir[i + 1] + window_ir[i + 2]) / 5.0;
     }
 
-    /* ---- HR：IR 通道自相关 ---- */
+    int min_distance = (int)(rate * PEAK_MIN_DIST_SEC);
+    if (min_distance < 5) min_distance = 5;
+    if (min_distance > 300) min_distance = 300;
+    double threshold = mean_ir + PEAK_THR_AC * ac_ir;
+
+    static uint32_t peaks[64];
+    int peak_count = 0;
+    int last_peak = -min_distance * 2;
+    for (int i = 1; i < n - 1; ++i) {
+        if (smooth[i] > threshold && smooth[i] >= smooth[i - 1] &&
+            smooth[i] > smooth[i + 1] && i - last_peak >= min_distance) {
+            peaks[peak_count] = (uint32_t)i;
+            if (peak_count < 63) {
+                ++peak_count;
+            }
+            last_peak = i;
+        }
+    }
+
     uint16_t bpm = 0;
-    float clarity = 0.0f;
-    autocorr(ir, wn, rate, &bpm, &clarity);
+    double interval_cv = 1.0;
+    double qcd = 1.0;
+    uint32_t median_interval = 0;
+    if (peak_count >= 2) {
+        static uint32_t intervals[64];
+        int interval_count = peak_count - 1;
+        for (int i = 0; i < interval_count; ++i) {
+            intervals[i] = peaks[i + 1] - peaks[i];
+        }
+        qsort(intervals, (size_t)interval_count, sizeof(uint32_t), cmp_u32);
+        median_interval = intervals[interval_count / 2];
+        if (median_interval > 0) {
+            bpm = (uint16_t)(60.0 * rate / (double)median_interval + 0.5);
+        }
+        if (interval_count >= 3 && median_interval > 0) {
+            qcd = (double)(intervals[(3 * interval_count) / 4] -
+                                    intervals[interval_count / 4]) /
+                  (double)median_interval;
+        }
 
-    bool hr_ok = (bpm >= BPM_MIN && bpm <= BPM_MAX && clarity >= CLARITY_VALID);
+        double mean_interval = 0.0;
+        for (int i = 0; i < interval_count; ++i) {
+            mean_interval += (double)intervals[i];
+        }
+        mean_interval /= interval_count;
+        double interval_variance = 0.0;
+        for (int i = 0; i < interval_count; ++i) {
+            double delta = (double)intervals[i] - mean_interval;
+            interval_variance += delta * delta;
+        }
+        interval_variance /= interval_count;
+        if (mean_interval > 0.0) {
+            interval_cv = sqrt(interval_variance) / mean_interval;
+        }
+    }
+
+    int confidence = 0;
+    if (peak_count >= 5) confidence += 60;
+    else if (peak_count >= 3) confidence += 40;
+    else if (peak_count >= 2) confidence += 20;
+    if (peak_count >= 4) {
+        if (interval_cv < 0.10) confidence += 35;
+        else if (interval_cv < 0.20) confidence += 25;
+        else if (interval_cv < 0.35) confidence += 10;
+    }
+    if (confidence > 100) confidence = 100;
+    result.confidence = (uint8_t)confidence;
+
+    bool hr_ok = (peak_count >= 4 && bpm >= 30 && bpm <= 220 &&
+                  qcd <= QCD_VALID_MAX);
+    if (hr_ok && s_last_stable_hr > 0) {
+        uint16_t difference = (bpm > s_last_stable_hr)
+                                  ? (bpm - s_last_stable_hr)
+                                  : (s_last_stable_hr - bpm);
+        if ((double)difference >
+                HR_CHANGE_FRAC * (double)s_last_stable_hr &&
+            qcd > QCD_STRICT) {
+            hr_ok = false;
+        }
+    }
+    if (hr_ok && s_last_stable_hr == 0) {
+        if (s_last_ok_bpm > 0) {
+            uint16_t difference = (bpm > s_last_ok_bpm)
+                                      ? (bpm - s_last_ok_bpm)
+                                      : (s_last_ok_bpm - bpm);
+            if (difference <= COLD_AGREE_BPM) {
+                ++s_cold_agree;
+            } else {
+                s_cold_agree = 0;
+            }
+        }
+        s_last_ok_bpm = bpm;
+        if (s_cold_agree < 1) {
+            hr_ok = false;
+        }
+    }
+
     uint16_t hr_out = 0;
     if (hr_ok) {
-        /* 输出平滑：最近 3 个有效 BPM 中位数 */
         s_hr_hist[s_hr_hist_n % HR_SMOOTH_N] = bpm;
-        s_hr_hist_n++;
+        ++s_hr_hist_n;
         if (s_hr_hist_n >= HR_SMOOTH_N) {
-            uint16_t t[HR_SMOOTH_N];
-            for (int i = 0; i < HR_SMOOTH_N; i++) {
-                t[i] = s_hr_hist[i];
-            }
-            for (int i = 0; i < HR_SMOOTH_N - 1; i++) {
-                for (int j = i + 1; j < HR_SMOOTH_N; j++) {
-                    if (t[j] < t[i]) {
-                        uint16_t tmp = t[i]; t[i] = t[j]; t[j] = tmp;
+            uint16_t sorted[HR_SMOOTH_N];
+            memcpy(sorted, s_hr_hist, sizeof(sorted));
+            for (int i = 0; i < HR_SMOOTH_N - 1; ++i) {
+                for (int j = i + 1; j < HR_SMOOTH_N; ++j) {
+                    if (sorted[j] < sorted[i]) {
+                        uint16_t temporary = sorted[i];
+                        sorted[i] = sorted[j];
+                        sorted[j] = temporary;
                     }
                 }
             }
-            hr_out = t[HR_SMOOTH_N / 2];
+            hr_out = sorted[HR_SMOOTH_N / 2];
         } else {
             hr_out = bpm;
         }
         s_last_stable_hr = hr_out;
     }
 
-    /* ---- SpO2：自相关峰幅值作 AC（与 HR 同 lag） ---- */
-    int lag = (int)(60.0f * rate / (float)(hr_ok ? bpm : (s_last_stable_hr > 0 ? s_last_stable_hr : 75)));
-    float ac_ir = autocorr_ac(ir, wn, lag);
-    float ac_red = autocorr_ac(red, wn, lag);
-    float ratio_ir = (float)(ac_ir / mean_ir);
-    float ratio_red = (float)(ac_red / mean_red);
-
-    int spo2_valid = 0;
-    float R = -1.0f;
-    if (ratio_ir > 0.0001f && ratio_red > 0.0001f) {
-        R = ratio_red / ratio_ir;
-        if (R >= 0.4f && R <= 1.2f) {
-            float spo2 = -45.060f * R * R + 30.354f * R + 94.845f;
-            if (spo2 < 0) spo2 = 0;
-            if (spo2 > 100) spo2 = 100;
-            r.spo2 = (uint8_t)(spo2 + 0.5f);
-            spo2_valid = 1;
+    if (hr_ok) {
+        result.flags |= 0x01;
+        result.heart_rate = hr_out;
+    } else if (s_last_stable_hr > 0) {
+        result.flags |= 0x01 | 0x04;
+        result.heart_rate = s_last_stable_hr;
+        if (confidence > 40) {
+            confidence = 40;
+            result.confidence = (uint8_t)confidence;
         }
     }
-    ESP_LOGI("hr_spo2", "RAW n=%d irDC=%.0f irAC=%.0f redDC=%.0f redAC=%.0f R=%.2f rate=%.0fHz",
-             wn, mean_ir, (double)ac_ir, mean_red, (double)ac_red, (double)R, rate);
+    if (spo2_valid && hr_ok) {
+        result.flags |= 0x02;
+    }
+    if (confidence < 60) {
+        result.flags |= 0x04;
+    }
 
-    /* ---- flags ---- */
-    uint8_t flags = 0;
-    if (hr_ok) {
-        flags |= 0x01;
-        r.heart_rate = hr_out;
-    } else if (s_last_stable_hr > 0) {
-        /* 低置信/运动：维持上一稳定值，标记伪影位 */
-        flags |= 0x01 | 0x04;
-        r.heart_rate = s_last_stable_hr;
-    }
-    if (spo2_valid && clarity >= CLARITY_VALID) {
-        flags |= 0x02;
-    }
-    ESP_LOGW("diag", "bpm=%u clarity=%.2f R=%.2f hr_ok=%d spo2_ok=%d",
-             bpm, (double)clarity, (double)R, hr_ok, spo2_valid);
-    r.flags = flags;
+    float heart_band_ratio = periodicity_at_lag(window_ir, n, mean_ir,
+                                                 median_interval);
+    publish_diag((float)rate, mean_ir, mean_red, ac_ir, ac_red,
+                 heart_band_ratio, (float)confidence / 100.0f, result.flags);
 
-    /* 调试转储（临时）：输出完整窗口 IR 样本（每 5 点一个，ir red 同行），
-     * PC 端离线重建波形判断信号质量；联调完成后移除 */
-    for (int i = 0; i < wn; i += 5) {
-        ESP_LOGW("raw", "%.0f %.0f", (double)ir[i], (double)red[i]);
+#ifdef WRIST_DIAG_RAW
+    for (int i = 0; i < n; i += 5) {
+        ESP_LOGW("wrist_raw", "%lu %lu",
+                 (unsigned long)window_ir[i], (unsigned long)window_red[i]);
     }
-    return r;
+#endif
+
+    return result;
 }

@@ -1,5 +1,6 @@
 # voice-bridge 运行依赖（v0.2 继承 + v0.3/长期RAG：numpy + jieba + v0.4 A5：edge 7.2.8 + miniaudio）
 fastapi>=0.110
+pydantic>=2.0     # schemas.py 直接使用 model_validator
 uvicorn>=0.29
 sherpa-onnx>=1.10.30
 edge-tts==7.2.8     # v0.4 A5：7.2.8 修复 403；方向1 预连接 vendored 其内部 wire 协议（communicate/constants/drm），锁死版本防协议漂移
@@ -7,7 +8,9 @@ miniaudio>=1.5     # v0.4 A5：内嵌解码器，mp3 → 16kHz/16bit/mono PCM（
 aiohttp>=3.8       # 方向1 预连接：直接 ws_connect 建 edge WSS（edge-tts 传递依赖，显式声明）
 certifi>=2023      # 方向1 预连接：SSL 证书（ssl.create_default_context）
 openai>=1.30
+httpx>=0.28       # Hermes SSE 与测量脚本直接使用；必须可禁用环境代理
 python-multipart>=0.0.9
 PyYAML>=6.0
 numpy>=1.24  # VAD RMS 计算（v0.1 已通过 sherpa-onnx 间接依赖）
 jieba>=0.42  # 长期 RAG：BM25 关键词检索分词（唯一新增依赖，RAG Spec §2 红线）
+zeroconf>=0.150  # voicebridge.local mDNS 广播

@@ -196,7 +196,7 @@ def test_t9_knowledge_reload(tmp_path):
     assert kb.search("血氧", top_k=1)[0]["doc"]["id"] == "b"
 
 
-# ---------- T6/T7/T8 真实集成（skip） ----------
+# ---------- T6 真实集成（资源缺失时 skip） ----------
 def _has_deepseek_key() -> bool:
     if os.environ.get("DEEPSEEK_API_KEY"):
         return True
@@ -233,6 +233,7 @@ def test_t6_lightweight_open_ms():  # 真实集成（稳态：暖机后）
     from app.main import app
 
     with TestClient(app) as c:
+        c.headers.update({"X-Device-Token": app.state.device_auth.token})
         # 暖机：首次请求付 DeepSeek 冷连接 + 字典加载成本
         c.post("/api/v1/voice/chat/stream",
                files={"audio": ("s.wav", make_speech_wav(2.0), "audio/wav")})
@@ -247,11 +248,25 @@ def test_t6_lightweight_open_ms():  # 真实集成（稳态：暖机后）
     assert timing["open_ms"] <= 6000
 
 
-@pytest.mark.skipif(not (_has_deepseek_key() and _hermes_ready()), reason="需真实环境")
-def test_t7_shared_memory_lightweight():
-    pass  # 微信写 USER.md → 语音轻量通道读到，验收人工核验（见自测报告）
+def test_t7_shared_memory_is_injected_into_lightweight_prompt(tmp_path):
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户画像", encoding="utf-8")
+
+    class Memory:
+        def load_recent(self):
+            return "英文名: Vange"
+
+    llm = LightweightLLM(
+        "sk-test", "https://api.deepseek.com", "deepseek-chat", profile,
+        memory_store=Memory(),
+    )
+    try:
+        assert "英文名: Vange" in llm._system_prompt()
+    finally:
+        if hasattr(llm, "close"):
+            llm.close()
 
 
-@pytest.mark.skipif(not _hermes_ready(), reason="需 Hermes API Server")
-def test_t8_slow_path_regression():
-    pass  # 技能触发仍走 Hermes + 安抚语（v0.3 已实现，回归验证见自测报告）
+def test_t8_tool_keyword_routes_to_hermes():
+    router = Router(tool_keywords=["查快递"], skill_keywords=[])
+    assert router.route("帮我查快递", rag_hit=False) == HERMES

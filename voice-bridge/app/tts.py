@@ -382,7 +382,16 @@ class TTSEngine:
 
     def stream_synthesize(self, text: str, min_segment_samples: int = 800):
         """方案2：流式合成（返回 async generator），供 pipeline 边收边发帧。"""
-        return self.primary.stream_synthesize(text, min_segment_samples)
+        async def stream():
+            try:
+                async for segment in self.primary.stream_synthesize(text, min_segment_samples):
+                    yield segment
+            except TTSError:
+                raise
+            except Exception as exc:
+                raise TTSError(f"TTS 流式合成失败: {exc}") from exc
+
+        return stream()
 
     async def open_preconnect(self, timeout: float = 2.0):
         """方向1：预建连接（委托 primary）。primary 不支持时返回 None。"""

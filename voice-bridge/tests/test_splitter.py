@@ -58,3 +58,15 @@ def test_comma_not_split_short_sentence():
     """逗号本身不拆短句（逗号是软边界，只在兜底时用）。"""
     r = _split("哈哈，你好呀～")
     assert len(r) == 1  # 波浪号前只有一个逗号，整句不拆（波浪号才拆）
+
+
+def test_space_between_stream_deltas_is_preserved():
+    sb = SentenceBuffer()
+    assert sb.feed("Hello") == []
+    assert sb.feed(" world.") + sb.flush() == ["Hello world."]
+
+
+def test_markdown_marker_split_across_deltas_is_cleaned_after_assembly():
+    sb = SentenceBuffer()
+    assert sb.feed("**Hello") == []
+    assert sb.feed(" world**.") + sb.flush() == ["Hello world."]

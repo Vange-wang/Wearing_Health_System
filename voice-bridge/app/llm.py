@@ -72,6 +72,9 @@ class LLMBase(ABC):
     def stream_chat(self, user_text: str):
         """用户文本 → 正文增量迭代器（Iterator[str]，工具指示已过滤）。"""
 
+    def close(self) -> None:
+        """Release reusable network resources; fake/local backends may no-op."""
+
 
 class HermesLLM(LLMBase):
     """Hermes API Server 后端（OpenAI 兼容 /v1/chat/completions）。"""
@@ -97,6 +100,7 @@ class HermesLLM(LLMBase):
             base_url=base_url,
             http_client=httpx.Client(trust_env=False, timeout=60.0),
         )
+        self._stream_client = httpx.Client(trust_env=False, timeout=180.0)
         self.model = model
         # 分段计量（每次 stream_chat 重置）：tool_seen / first_chunk_ms / first_content_ms
         self.stats: dict = {}
@@ -147,12 +151,17 @@ class HermesLLM(LLMBase):
             ],
             "stream": True,
         }
-        stream_client = httpx.Client(trust_env=False, timeout=180.0)
+        resp = None
         try:
-            req = stream_client.build_request("POST", url, json=body, headers=headers)
-            resp = stream_client.send(req, stream=True)
+            req = self._stream_client.build_request("POST", url, json=body, headers=headers)
+            resp = self._stream_client.send(req, stream=True)
+            resp.raise_for_status()
         except Exception as e:
-            stream_client.close()
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
             raise LLMError(f"Hermes 流式调用失败: {e}") from e
 
         stats = self.stats
@@ -205,12 +214,15 @@ class HermesLLM(LLMBase):
                     resp.close()
                 except Exception:
                     pass
-                try:
-                    stream_client.close()
-                except Exception:
-                    pass
 
         return _iter()
+
+    def close(self) -> None:
+        """Close both the OpenAI client and the reused raw-SSE client."""
+        try:
+            self.client.close()
+        finally:
+            self._stream_client.close()
 
 
 def load_user_profile(path) -> tuple[str, bool]:
@@ -493,6 +505,10 @@ class LightweightLLM(LLMBase):
     def stop_heartbeat(self) -> None:
         """停止心跳（服务关闭时调用）。"""
         self._heartbeat_stop.set()
+
+    def close(self) -> None:
+        self.stop_heartbeat()
+        self.client.close()
 
     def _heartbeat_loop(self, interval: float) -> None:
         while not self._heartbeat_stop.is_set():

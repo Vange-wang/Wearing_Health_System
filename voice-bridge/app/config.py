@@ -13,6 +13,10 @@ import yaml
 BASE_DIR = Path(__file__).resolve().parent.parent  # voice-bridge/
 
 
+class ConfigError(ValueError):
+    """Tracked or local service configuration is invalid."""
+
+
 class Config:
     def __init__(self, path: Path):
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -21,6 +25,17 @@ class Config:
         srv = self._data.get("server", {})
         self.server_host = srv.get("host", "0.0.0.0")
         self.server_port = int(srv.get("port", 8710))
+
+        device_auth = self._data.get("device_auth", {})
+        self.device_token_env = str(
+            device_auth.get("token_env", "DEVICE_TOKEN")
+        )
+        self.device_auth_mode = str(
+            self._read_key("DEVICE_AUTH_MODE")
+            or device_auth.get("mode", "required")
+        ).lower()
+        if self.device_auth_mode not in {"observe", "required"}:
+            raise ConfigError("DEVICE_AUTH_MODE must be observe or required")
 
         asr = self._data.get("asr", {})
         self.asr_model_dir = BASE_DIR / asr.get("model_dir", "models/sherpa-onnx-sense-voice-zh")
@@ -45,6 +60,22 @@ class Config:
         pipeline = self._data.get("pipeline", {})
         self.pipeline_sentence_max_chars = int(pipeline.get("sentence_max_chars", 50))
         self.pipeline_max_frame_bytes = int(pipeline.get("max_frame_bytes", 8 * 1024 * 1024))
+        # 15 s mono PCM16 is 480000 bytes; the small allowance covers WAV metadata.
+        self.pipeline_max_input_bytes = int(pipeline.get("max_input_bytes", 512 * 1024))
+        self.pipeline_max_input_seconds = float(pipeline.get("max_input_seconds", 15))
+        self.pipeline_stream_idle_timeout_seconds = float(
+            pipeline.get("stream_idle_timeout_seconds", 5)
+        )
+        # Preserve the empirically used value; it is now bounded and explicit.
+        self.pipeline_tts_workers = int(pipeline.get("tts_workers", 8))
+        if (
+            self.pipeline_max_input_bytes <= 0
+            or self.pipeline_max_input_seconds <= 0
+            or self.pipeline_stream_idle_timeout_seconds <= 0
+        ):
+            raise ConfigError("pipeline input limits must be positive")
+        if not 1 <= self.pipeline_tts_workers <= 16:
+            raise ConfigError("pipeline tts_workers must be between 1 and 16")
         self.pipeline_comfort_text = pipeline.get("comfort_text", "好的，我查一下。")
         self.pipeline_sentence_gap_ms = int(pipeline.get("sentence_gap_ms", 300))
         # 慢路径安抚语池（query，随机轮换，启动时预合成缓存）。快路径 ack 已删除。
@@ -109,9 +140,18 @@ class Config:
         self.health_alert_cooldown_s = float(health.get("alert_cooldown_s", 600))
         self.health_data_stale_seconds = float(health.get("data_stale_seconds", 300))
         # P4 微信预警推送（Spec §5.3/§5.4）
-        self.health_wechat_chat_id = str(health.get("wechat_chat_id", ""))
+        self.health_wechat_chat_id_env = str(
+            health.get("wechat_chat_id_env", "WECHAT_CHAT_ID")
+        )
+        self.health_wechat_chat_id = str(
+            self._read_key(self.health_wechat_chat_id_env) or ""
+        )
         self.health_wechat_daily_limit = int(health.get("wechat_daily_limit", 5))
         self.health_wechat_push_enabled = bool(health.get("wechat_push_enabled", True))
+        if self.health_wechat_push_enabled and not self.health_wechat_chat_id:
+            raise ConfigError(
+                f"{self.health_wechat_chat_id_env} is required when WeChat push is enabled"
+            )
 
         self.log_level = self._data.get("log", {}).get("level", "INFO")
 
@@ -122,6 +162,10 @@ class Config:
     def lightweight_api_key(self) -> str | None:
         """读取 DeepSeek key（轻量通道）：环境变量优先，其次项目 .env。"""
         return self._read_key(self.lw_api_key_env)
+
+    def device_token(self) -> str | None:
+        """Read the BOX-3 token from its configured local environment key."""
+        return self._read_key(self.device_token_env)
 
     def _read_key(self, env_name: str) -> str | None:
         key = os.environ.get(env_name)
