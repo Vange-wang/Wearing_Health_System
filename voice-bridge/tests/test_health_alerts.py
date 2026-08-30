@@ -106,6 +106,98 @@ def test_fresh_values_filter_each_field_at_five_minutes() -> None:
     assert "血氧 98" not in reply
 
 
+def make_health_context_pipeline(store: HealthDataStore, stale_seconds: float = 60):
+    pipeline = object.__new__(StreamingPipeline)
+    pipeline.health = store
+    pipeline.data_stale_seconds = stale_seconds
+    return pipeline
+
+
+def test_lightweight_health_context_contains_two_fresh_fields() -> None:
+    clock = FakeMonotonic()
+    store = HealthDataStore(monotonic=clock)
+    store.update(hr=76, spo2=98, seq=1, flags=0x03, quality=1.0)
+    clock.advance(8)
+
+    context = make_health_context_pipeline(store)._build_lightweight_health_context()
+
+    assert context is not None
+    assert "心率 76（8秒前）" in context
+    assert "血氧 98（8秒前）" in context
+
+
+def test_lightweight_health_context_omits_independently_stale_field() -> None:
+    clock = FakeMonotonic()
+    store = HealthDataStore(monotonic=clock)
+    store.update(hr=None, spo2=98, seq=1, flags=0x02, quality=1.0)
+    clock.advance(61)
+    store.update(hr=76, spo2=None, seq=2, flags=0x01, quality=1.0)
+
+    context = make_health_context_pipeline(store)._build_lightweight_health_context()
+
+    assert context is not None
+    assert "心率 76（0秒前）" in context
+    assert "血氧" not in context
+    assert "98" not in context
+
+
+def test_lightweight_health_context_is_none_when_all_fields_are_stale() -> None:
+    clock = FakeMonotonic()
+    store = HealthDataStore(monotonic=clock)
+    store.update(hr=76, spo2=98, seq=1, flags=0x03, quality=1.0)
+    clock.advance(61)
+
+    context = make_health_context_pipeline(store)._build_lightweight_health_context()
+
+    assert context is None
+
+
+@pytest.mark.parametrize(
+    ("flags", "quality"),
+    [
+        (0x03 | 0x04, 1.0),
+        (0x03, 0.49),
+    ],
+)
+def test_lightweight_health_context_never_exposes_rejected_frame(
+    flags: int, quality: float
+) -> None:
+    clock = FakeMonotonic()
+    store = HealthDataStore(monotonic=clock)
+    store.update(hr=150, spo2=88, seq=1, flags=flags, quality=quality)
+
+    context = make_health_context_pipeline(store)._build_lightweight_health_context()
+
+    assert context is None
+
+
+def test_pipeline_binds_read_only_health_context_provider() -> None:
+    class CapturingLightweight:
+        def __init__(self):
+            self.provider = None
+
+        def set_health_context_provider(self, provider) -> None:
+            self.provider = provider
+
+    clock = FakeMonotonic()
+    store = HealthDataStore(monotonic=clock)
+    store.update(hr=76, spo2=98, seq=1, flags=0x03, quality=1.0)
+    lightweight = CapturingLightweight()
+
+    StreamingPipeline(
+        asr=None,
+        llm=None,
+        tts=None,
+        vad=None,
+        lightweight_llm=lightweight,
+        health=store,
+        data_stale_seconds=60,
+    )
+
+    assert callable(lightweight.provider)
+    assert "心率 76" in lightweight.provider()
+
+
 def make_outbox(tmp_path, clock, ids, *, lease_seconds=30) -> AlertOutbox:
     return AlertOutbox(
         tmp_path / "alert_outbox.json",

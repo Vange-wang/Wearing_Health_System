@@ -58,6 +58,48 @@ def test_t1_lightweight_deepseek_and_user_md(monkeypatch, tmp_path):
     assert load_user_profile(tmp_path / "missing.md") == ("", False)
 
 
+def test_lightweight_health_context_is_injected_only_for_health_questions(tmp_path):
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户画像", encoding="utf-8")
+    llm = LightweightLLM("sk-test", "https://api.deepseek.com", "deepseek-chat", profile)
+    calls = []
+
+    def health_context():
+        calls.append(True)
+        return "当前健康数据（仅可引用以下新鲜实测值）：心率 78（2秒前），血氧 97（3秒前）。"
+
+    try:
+        llm.set_health_context_provider(health_context)
+        current = llm._system_prompt("帮我看看心率")
+        reason = llm._system_prompt("心率为什么突然变快")
+        greeting = llm._system_prompt("你好")
+
+        assert "心率 78" in current
+        assert "血氧 97" in reason
+        assert "心率 78" not in greeting
+        assert "血氧 97" not in greeting
+        assert "若系统上下文提供“当前健康数据”" not in greeting
+        assert "若系统上下文提供“当前健康数据”" in current
+        assert len(calls) == 2
+    finally:
+        llm.close()
+
+
+def test_lightweight_prompt_for_missing_health_data_forbids_fabrication(tmp_path):
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户画像", encoding="utf-8")
+    llm = LightweightLLM("sk-test", "https://api.deepseek.com", "deepseek-chat", profile)
+    try:
+        llm.set_health_context_provider(lambda: None)
+        prompt = llm._system_prompt("帮我看看心率")
+
+        assert "暂无最新数据" in prompt
+        assert "不得猜测或编造数值" in prompt
+        assert "正常范围、原因、方法、关系、选购" in prompt
+    finally:
+        llm.close()
+
+
 # ---------- T2 · 路由判定：纯闲聊→轻量、技能/工具→慢路径、知识库→RAG ----------
 def test_t2_router():
     r = Router(tool_keywords=["查快递", "发邮件", "帮我查"], skill_keywords=["成分分析"])

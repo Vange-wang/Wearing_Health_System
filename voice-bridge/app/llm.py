@@ -32,6 +32,9 @@ SESSION_TTL_SECONDS = 600  # 10 分钟无交互则清空历史
 # 周期心跳（max_tokens=1 最小请求）保持连接热，llm_ttft 稳定 ~500ms。
 HEARTBEAT_INTERVAL_SECONDS = 240  # 每 4 分钟一次（< TLS 空闲超时，保守）
 
+# 仅这些已接入实测字段的问题允许读取轻量健康上下文；普通闲聊不触发提供器。
+HEALTH_CONTEXT_TERMS = ("心率", "心跳", "血氧")
+
 # 慢路径哨兵：SSE 首次出现工具调用时，stream_chat 产出此对象一次，
 # 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
 TOOL_SENTINEL = object()
@@ -51,6 +54,11 @@ SYSTEM_PROMPT = """你是小V，一个聪明友善、活泼亲切的健康助手
 - 实时数据（天气、快递、新闻、股票、路况等）你无法联网查询时，诚实说「这个我暂时查不了，需要联网搜索」，禁止编造具体数值。
 - 不主动编造任何具体数据或事实。
 - 不主动自我介绍，直接回答用户问题；除非用户明确问「你是谁/你叫什么名字」。"""
+
+HEALTH_SYSTEM_POLICY = """本轮涉及健康字段，以下更具体规则优先：
+- 心率、血氧已接入真实监测。若系统上下文提供“当前健康数据”，只能引用其中的新鲜实测值；若未提供或数据已过期，如实说明暂无最新数据，不得猜测或编造数值。
+- 用户询问正常范围、原因、方法、关系、选购等健康知识时，正常回答知识问题，可结合已提供的新鲜数据，但不得把知识回答偷换成单纯报数。
+- 血压、睡眠等未接入字段被问到当前实测值时，诚实说明尚未接入。"""
 
 
 class LLMError(Exception):
@@ -267,6 +275,7 @@ class LightweightLLM(LLMBase):
         self.model = model
         self.user_profile_path = user_profile_path
         self.memory = memory_store  # 单一记忆源：MemoryClient（可选）
+        self._health_context_provider = None
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
         # ISSUE-0008：滑动窗口会话历史（多轮指代消解）。
         # 单会话（当前单 BOX-3 设备）；多设备时需按来源区分会话。
@@ -278,7 +287,11 @@ class LightweightLLM(LLMBase):
         self._heartbeat_thread: threading.Thread | None = None
         logger.info("Lightweight(DeepSeek) ready: %s @ %s", model, base_url)
 
-    def _system_prompt(self) -> str:
+    def set_health_context_provider(self, provider) -> None:
+        """绑定只读健康上下文提供器；由 Pipeline 注入，不访问网络。"""
+        self._health_context_provider = provider
+
+    def _system_prompt(self, user_text: str = "") -> str:
         profile, ok = load_user_profile(self.user_profile_path)
         if not ok:
             raise LLMError("USER.md 读取失败（轻量通道共用记忆无法注入）")
@@ -292,6 +305,12 @@ class LightweightLLM(LLMBase):
             facts = self.memory.load_recent()
             if facts:
                 prompt += "\n\n以下是用户长期记忆（事实）：\n" + facts
+        if any(term in user_text for term in HEALTH_CONTEXT_TERMS):
+            prompt += "\n\n" + HEALTH_SYSTEM_POLICY
+            if self._health_context_provider is not None:
+                context = self._health_context_provider()
+                if context:
+                    prompt += "\n\n" + context
         return prompt
 
     def _get_messages(self, user_text: str) -> list[dict]:
@@ -299,7 +318,7 @@ class LightweightLLM(LLMBase):
 
         超过 SESSION_TTL_SECONDS 无交互则清空历史，避免久远对话串上下文。
         """
-        system = self._system_prompt()
+        system = self._system_prompt(user_text)
         now = time.time()
         with self._history_lock:
             if now - self._last_active > SESSION_TTL_SECONDS:

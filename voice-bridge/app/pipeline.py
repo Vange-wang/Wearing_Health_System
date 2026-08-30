@@ -129,6 +129,9 @@ class StreamingPipeline:
         # BLE 健康数据（P3 DATA 路由模板直答）：HealthDataStore + 新鲜度阈值
         self.health = health
         self.data_stale_seconds = float(data_stale_seconds)
+        bind_health = getattr(self.lightweight_llm, "set_health_context_provider", None)
+        if callable(bind_health):
+            bind_health(self._build_lightweight_health_context)
         self.tts_workers = int(tts_workers)
         if not 1 <= self.tts_workers <= 16:
             raise ValueError("tts_workers must be between 1 and 16")
@@ -166,6 +169,7 @@ class StreamingPipeline:
         """P3 DATA 模板直答（Spec §4.1）：根据最新健康数据构造回答，不经 LLM。
 
         - 问血压（未接入）→ 诚实口径（防误报血氧值）；
+        - 显式问单字段 → 只报所问字段；双字段或无字段追问 → 报可用字段；
         - 有新鲜数据 → 报数值 + 正常/偏高/偏低判断；
         - 无数据或超新鲜度阈值 → 答「检测暂时中断」（Spec §6 第 7 条）。
         """
@@ -176,8 +180,13 @@ class StreamingPipeline:
         hr, spo2 = self.health.get_fresh_values(self.data_stale_seconds)
         if hr is None and spo2 is None:
             return "健康数据检测暂时中断了，请检查腕带是否佩戴好。"
+        asks_hr = "心率" in text or "心跳" in text
+        asks_spo2 = "血氧" in text
+        has_explicit_field = asks_hr or asks_spo2
+        include_hr = asks_hr or not has_explicit_field
+        include_spo2 = asks_spo2 or not has_explicit_field
         parts = []
-        if hr is not None:
+        if include_hr and hr is not None:
             hr_i = int(round(hr))
             h = time.localtime().tm_hour
             low = self.health.hr_low_night if (h >= self.health.night_start or h < self.health.night_end) else self.health.hr_low
@@ -187,11 +196,37 @@ class StreamingPipeline:
                 parts.append(f"心率 {hr_i}，有点偏低")
             else:
                 parts.append(f"心率 {hr_i}，正常")
-        if spo2 is not None:
+        if include_spo2 and spo2 is not None:
             parts.append(f"血氧 {int(round(spo2))}")
         if not parts:
             return "健康数据检测暂时中断了，请检查腕带是否佩戴好。"
         return "您当前" + "，".join(parts) + "。"
+
+    def _build_lightweight_health_context(self) -> str | None:
+        """为健康语义回答提供逐字段新鲜的只读实测上下文。"""
+        if self.health is None:
+            return None
+        latest = self.health.get_latest_fields()
+        parts = []
+        if (
+            latest.hr is not None
+            and latest.hr_age_s is not None
+            and latest.hr_age_s <= self.data_stale_seconds
+        ):
+            parts.append(
+                f"心率 {int(round(latest.hr))}（{int(round(latest.hr_age_s))}秒前）"
+            )
+        if (
+            latest.spo2 is not None
+            and latest.spo2_age_s is not None
+            and latest.spo2_age_s <= self.data_stale_seconds
+        ):
+            parts.append(
+                f"血氧 {int(round(latest.spo2))}（{int(round(latest.spo2_age_s))}秒前）"
+            )
+        if not parts:
+            return None
+        return "当前健康数据（仅可引用以下新鲜实测值）：" + "，".join(parts) + "。"
 
     async def run(
         self, samples: np.ndarray, wav_path: Path, timing: TimingRecord | None = None
