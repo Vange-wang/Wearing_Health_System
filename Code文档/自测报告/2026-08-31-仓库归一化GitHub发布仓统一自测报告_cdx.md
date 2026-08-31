@@ -3,7 +3,7 @@
 - 任务：T-20260831-ESP-MONOREPO-01
 - 执行角色：Codex
 - 日期：2026-08-31
-- 当前状态：`WORKFLOW_ACTIVE`（本地同步与静态验证通过；远端推送、Hermes 复审、镜像备份和旧仓删除尚未完成）
+- 当前状态：`WORKFLOW_ACTIVE`（本地同步、静态验证、主仓推送、Hermes 复审和旧仓镜像备份已通过；旧仓删除尚未完成）
 - Spec：`规划文档/Spec文档/2026-08-31-仓库归一化主仓唯一源-spec_hm.md`
 - 任务单：`协同工作文档/codex_tasks/2026-08-31-仓库归一化主仓唯一源-任务单_hm.md`
 
@@ -59,8 +59,26 @@
 - 未导入 ESP-IDF/esp-box 上游源码、`components`、`managed_components`、build 产物、二进制、日志、缓存、真实凭据或 rollback 副本。
 - 未烧录、重启或采样设备。
 - 本任务是文件同步与 GitHub 操作，不进入语音运行时路径，首字输出延迟零影响。
-- 当前证据仅证明本地同步和静态测试；不能声称已推送、Hermes 已复审、镜像已备份或旧 GitHub 仓已删除。
+- 当前证据已证明本地同步、静态测试、主仓远端推送、Hermes 复审和旧仓镜像备份；不能声称旧 GitHub 仓已删除。
 
-## 6. 下一门
+## 6. 主仓远端与 Hermes 复审
 
-使用显式路径暂存 3 个腕带文件及本报告/完成报告，复核 staged 集合与 secret/artifact 边界后提交并推送 `Wearing_Health_System/main`。
+- 主仓提交：`b93a18ec4068dd2e6e3c81f6985056ada196427e`，已推送至 `Wearing_Health_System/main`。
+- GitHub API 核对：远端提交恰好 5 个允许路径，3 个腕带文件解码后 SHA-256 分别为 `22D167...`、`FA247B...`、`50AFC6...`，全部匹配源；forbidden path 计数为 0。
+- Hermes 审查报告：`协同工作文档/审查报告/2026-08-31-仓库归一化GitHub发布仓统一-实现与远端核验-审查_hm.md`。
+- Hermes verdict：`PASS_ZERO_ISSUES`，SERIOUS=0，放行 mirror 备份门；NON_SERIOUS=1 为报告状态滞后，本次回写已处理。
+
+## 7. 旧仓镜像备份
+
+- mirror：`D:\repo-archive\esp-box-github-before-delete-20260831.git`
+- 来源：从 GitHub `https://github.com/Vange-wang/esp-box.git` 执行 `git clone --mirror`，未依赖本地脏工作区。
+- `git fsck --full`：退出码 0。
+- `refs/heads/master`：`4025b229e05fbd27fb4b53e287bbe3648ab0a527`。
+- 标签：`release/en_factory_demo`、`v0.1.1`、`v0.2.1`、`v0.3.0`、`v0.5.0`，missing=0、extra=0。
+- 归档文件数：22；总字节数：475,826,095。
+- refs 清单：`D:\repo-archive\esp-box-github-before-delete-20260831.refs.txt`，SHA-256 `2D790DED062E4C747407F5A0167019324ED3345E4118276B6582CBAA84BE89D6`。
+- 文件哈希清单：`D:\repo-archive\esp-box-github-before-delete-20260831.manifest.txt`，SHA-256 `1D1DEE85EDC0B046ACE3CEBB160D0F8BAD072F574D23A286FF63860CCB446A75`。
+
+## 8. 下一门
+
+确认主仓报告更新已推送后，检查 GitHub token 的 `delete_repo` scope；缺失则进入 `EXTERNAL_BLOCKED` 获取授权，随后二次核对 `Vange-wang/esp-box` 并执行删除与 404 验证。
