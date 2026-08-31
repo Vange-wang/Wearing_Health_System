@@ -34,6 +34,48 @@ def test_timestamp_rate_is_wrap_safe_and_invalid_rate_has_no_fake_fallback():
     assert "rate < MIN_RATE_HZ || rate > MAX_RATE_HZ" in algorithm
 
 
+def test_false_peak_filter_and_bounded_recovery_guards_are_in_algorithm_source():
+    algorithm = read("hr_spo2.c")
+
+    for marker in (
+        "SECONDARY_PERIOD_TOL 0.20",
+        "SECONDARY_INTERVAL_RATIO_MAX 1.55",
+        "SECONDARY_AMPLITUDE_RATIO_MAX 0.85",
+        "filter_secondary_peaks",
+        "HEART_PERIODICITY_MIN 0.45",
+        "s_large_offset_windows",
+        "RECOVERY_CONFIRM_WINDOWS 2",
+    ):
+        assert marker in algorithm
+
+
+def test_spo2_requires_channel_morphology_and_accepted_hr_quality():
+    algorithm = read("hr_spo2.c")
+
+    for marker in (
+        "normalized_correlation",
+        "SPO2_CHANNEL_CORR_MIN 0.70",
+        "spo2_ratio_valid",
+        "channel_correlation >= SPO2_CHANNEL_CORR_MIN",
+        "confidence >= 60",
+        "result.spo2 = 0",
+    ):
+        assert marker in algorithm
+
+
+def test_selftest_contains_false_peak_recovery_and_spo2_regressions():
+    selftest = read("hr_spo2_selftest.c")
+
+    for marker in (
+        "check_secondary_peak_rejection",
+        "check_bounded_recovery",
+        "check_spo2_quality_gate",
+        "TEST_SECONDARY_DELAY_SEC 0.55",
+        "6500.0 *",
+    ):
+        assert marker in selftest
+
+
 def test_diagnostics_are_bounded_and_raw_samples_are_opt_in():
     algorithm = read("hr_spo2.c")
     diag_header = read("signal_diag.h")

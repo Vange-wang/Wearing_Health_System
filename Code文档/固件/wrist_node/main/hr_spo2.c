@@ -20,6 +20,12 @@
 #define QCD_STRICT 0.10
 #define HR_SMOOTH_N 3
 #define COLD_AGREE_BPM 20
+#define SECONDARY_PERIOD_TOL 0.20
+#define SECONDARY_INTERVAL_RATIO_MAX 1.55
+#define SECONDARY_AMPLITUDE_RATIO_MAX 0.85
+#define HEART_PERIODICITY_MIN 0.45
+#define SPO2_CHANNEL_CORR_MIN 0.70
+#define RECOVERY_CONFIRM_WINDOWS 2
 #define MIN_RATE_HZ 5.0
 #define MAX_RATE_HZ 1000.0
 
@@ -38,6 +44,7 @@ static uint16_t s_hr_hist[HR_SMOOTH_N];
 static int s_hr_hist_n;
 static uint16_t s_last_ok_bpm;
 static int s_cold_agree;
+static int s_large_offset_windows;
 
 static void reset_tracking_state(void)
 {
@@ -46,6 +53,7 @@ static void reset_tracking_state(void)
     s_hr_hist_n = 0;
     s_last_ok_bpm = 0;
     s_cold_agree = 0;
+    s_large_offset_windows = 0;
 }
 
 static void push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us)
@@ -116,6 +124,128 @@ static float periodicity_at_lag(const uint32_t *samples, int n,
     if (ratio < 0.0) ratio = 0.0;
     if (ratio > 1.0) ratio = 1.0;
     return (float)ratio;
+}
+
+static float normalized_correlation(const uint32_t *a, const uint32_t *b,
+                                    int n, double mean_a, double mean_b)
+{
+    double cross = 0.0;
+    double energy_a = 0.0;
+    double energy_b = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double centered_a = (double)a[i] - mean_a;
+        double centered_b = (double)b[i] - mean_b;
+        cross += centered_a * centered_b;
+        energy_a += centered_a * centered_a;
+        energy_b += centered_b * centered_b;
+    }
+    if (energy_a <= 0.0 || energy_b <= 0.0) {
+        return 0.0f;
+    }
+    double ratio = cross / sqrt(energy_a * energy_b);
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    return (float)ratio;
+}
+
+static bool close_to_reference(double value, double reference,
+                               double relative_tolerance)
+{
+    return reference > 0.0 &&
+           fabs(value - reference) <= relative_tolerance * reference;
+}
+
+static int filter_secondary_peaks(uint32_t *peaks, double *heights, int count,
+                                  bool *secondary_detected)
+{
+    *secondary_detected = false;
+    if (count < 5) {
+        return count;
+    }
+
+    uint32_t pair_sums[64];
+    uint32_t sorted_pair_sums[64];
+    int pair_count = count - 2;
+    for (int i = 0; i < pair_count; ++i) {
+        pair_sums[i] = peaks[i + 2] - peaks[i];
+        sorted_pair_sums[i] = pair_sums[i];
+    }
+    qsort(sorted_pair_sums, (size_t)pair_count, sizeof(uint32_t), cmp_u32);
+    uint32_t pair_period = sorted_pair_sums[pair_count / 2];
+    if (pair_period == 0) {
+        return count;
+    }
+
+    int consistent_pairs = 0;
+    for (int i = 0; i < pair_count; ++i) {
+        uint32_t left = peaks[i + 1] - peaks[i];
+        uint32_t right = peaks[i + 2] - peaks[i + 1];
+        uint32_t shorter = left < right ? left : right;
+        uint32_t longer = left > right ? left : right;
+        if (shorter == 0 ||
+            (double)longer / (double)shorter >
+                SECONDARY_INTERVAL_RATIO_MAX) {
+            continue;
+        }
+        if (close_to_reference((double)pair_sums[i], (double)pair_period,
+                               SECONDARY_PERIOD_TOL)) {
+            ++consistent_pairs;
+        }
+    }
+    if (consistent_pairs < 3 || consistent_pairs * 2 < pair_count) {
+        return count;
+    }
+
+    bool drop[64] = { false };
+    for (int i = 1; i < count - 1; ++i) {
+        uint32_t left = peaks[i] - peaks[i - 1];
+        uint32_t right = peaks[i + 1] - peaks[i];
+        uint32_t shorter = left < right ? left : right;
+        uint32_t longer = left > right ? left : right;
+        if (shorter == 0 ||
+            (double)longer / (double)shorter >
+                SECONDARY_INTERVAL_RATIO_MAX ||
+            !close_to_reference((double)pair_sums[i - 1],
+                                (double)pair_period,
+                                SECONDARY_PERIOD_TOL)) {
+            continue;
+        }
+        double neighbor_height = fmin(heights[i - 1], heights[i + 1]);
+        if (heights[i] <= neighbor_height *
+                             SECONDARY_AMPLITUDE_RATIO_MAX) {
+            drop[i] = true;
+        }
+    }
+
+    if (close_to_reference((double)pair_sums[0], (double)pair_period,
+                           SECONDARY_PERIOD_TOL) &&
+        heights[0] <= heights[1] * SECONDARY_AMPLITUDE_RATIO_MAX &&
+        heights[2] <= heights[1] * SECONDARY_AMPLITUDE_RATIO_MAX) {
+        drop[0] = true;
+    }
+    if (close_to_reference((double)pair_sums[pair_count - 1],
+                           (double)pair_period, SECONDARY_PERIOD_TOL) &&
+        heights[count - 1] <= heights[count - 2] *
+                                   SECONDARY_AMPLITUDE_RATIO_MAX &&
+        heights[count - 3] <= heights[count - 2] *
+                                   SECONDARY_AMPLITUDE_RATIO_MAX) {
+        drop[count - 1] = true;
+    }
+
+    int filtered_count = 0;
+    for (int i = 0; i < count; ++i) {
+        if (drop[i]) {
+            continue;
+        }
+        peaks[filtered_count] = peaks[i];
+        heights[filtered_count] = heights[i];
+        ++filtered_count;
+    }
+    if (filtered_count == count) {
+        return count;
+    }
+    *secondary_detected = true;
+    return filtered_count;
 }
 
 static void publish_diag(float rate, double dc_ir, double dc_red,
@@ -215,7 +345,8 @@ hr_spo2_result_t hr_spo2_compute(void)
         return result;
     }
 
-    int spo2_valid = 0;
+    int spo2_ratio_valid = 0;
+    uint8_t spo2_candidate = 0;
     double ratio_ir = ac_ir / mean_ir;
     double ratio_red = ac_red / mean_red;
     if (ratio_ir > 0.0005 && ratio_red > 0.0005) {
@@ -224,8 +355,8 @@ hr_spo2_result_t hr_spo2_compute(void)
             double spo2 = -45.060 * ratio * ratio + 30.354 * ratio + 94.845;
             if (spo2 < 0.0) spo2 = 0.0;
             if (spo2 > 100.0) spo2 = 100.0;
-            result.spo2 = (uint8_t)(spo2 + 0.5);
-            spo2_valid = 1;
+            spo2_candidate = (uint8_t)(spo2 + 0.5);
+            spo2_ratio_valid = 1;
         }
     }
 
@@ -243,18 +374,24 @@ hr_spo2_result_t hr_spo2_compute(void)
     double threshold = mean_ir + PEAK_THR_AC * ac_ir;
 
     static uint32_t peaks[64];
+    static double peak_heights[64];
     int peak_count = 0;
     int last_peak = -min_distance * 2;
     for (int i = 1; i < n - 1; ++i) {
         if (smooth[i] > threshold && smooth[i] >= smooth[i - 1] &&
             smooth[i] > smooth[i + 1] && i - last_peak >= min_distance) {
             peaks[peak_count] = (uint32_t)i;
+            peak_heights[peak_count] = smooth[i] - mean_ir;
             if (peak_count < 63) {
                 ++peak_count;
             }
             last_peak = i;
         }
     }
+
+    bool secondary_detected = false;
+    peak_count = filter_secondary_peaks(peaks, peak_heights, peak_count,
+                                        &secondary_detected);
 
     uint16_t bpm = 0;
     double interval_cv = 1.0;
@@ -293,6 +430,17 @@ hr_spo2_result_t hr_spo2_compute(void)
         }
     }
 
+    float heart_band_ratio = periodicity_at_lag(window_ir, n, mean_ir,
+                                                median_interval);
+    float channel_correlation = normalized_correlation(
+        window_ir, window_red, n, mean_ir, mean_red);
+    bool waveform_quality_ok =
+        peak_count >= 4 && qcd <= QCD_VALID_MAX && interval_cv <= 0.35 &&
+        heart_band_ratio >= HEART_PERIODICITY_MIN;
+    if (secondary_detected && heart_band_ratio < HEART_PERIODICITY_MIN) {
+        waveform_quality_ok = false;
+    }
+
     int confidence = 0;
     if (peak_count >= 5) confidence += 60;
     else if (peak_count >= 3) confidence += 40;
@@ -305,8 +453,13 @@ hr_spo2_result_t hr_spo2_compute(void)
     if (confidence > 100) confidence = 100;
     result.confidence = (uint8_t)confidence;
 
-    bool hr_ok = (peak_count >= 4 && bpm >= 30 && bpm <= 220 &&
-                  qcd <= QCD_VALID_MAX);
+    bool hr_ok = (bpm >= 30 && bpm <= 220 && waveform_quality_ok);
+    bool recovery_accept = false;
+    if (s_last_stable_hr > 0) {
+        if (!hr_ok) {
+            s_large_offset_windows = 0;
+        }
+    }
     if (hr_ok && s_last_stable_hr > 0) {
         uint16_t difference = (bpm > s_last_stable_hr)
                                   ? (bpm - s_last_stable_hr)
@@ -314,10 +467,23 @@ hr_spo2_result_t hr_spo2_compute(void)
         if ((double)difference >
                 HR_CHANGE_FRAC * (double)s_last_stable_hr &&
             qcd > QCD_STRICT) {
-            hr_ok = false;
+            if (waveform_quality_ok) {
+                ++s_large_offset_windows;
+                if (s_large_offset_windows >= RECOVERY_CONFIRM_WINDOWS) {
+                    reset_tracking_state();
+                    recovery_accept = true;
+                } else {
+                    hr_ok = false;
+                }
+            } else {
+                s_large_offset_windows = 0;
+                hr_ok = false;
+            }
+        } else {
+            s_large_offset_windows = 0;
         }
     }
-    if (hr_ok && s_last_stable_hr == 0) {
+    if (hr_ok && s_last_stable_hr == 0 && !recovery_accept) {
         if (s_last_ok_bpm > 0) {
             uint16_t difference = (bpm > s_last_ok_bpm)
                                       ? (bpm - s_last_ok_bpm)
@@ -368,15 +534,17 @@ hr_spo2_result_t hr_spo2_compute(void)
             result.confidence = (uint8_t)confidence;
         }
     }
-    if (spo2_valid && hr_ok) {
+    if (spo2_ratio_valid && hr_ok && waveform_quality_ok &&
+        channel_correlation >= SPO2_CHANNEL_CORR_MIN && confidence >= 60) {
+        result.spo2 = spo2_candidate;
         result.flags |= 0x02;
+    } else {
+        result.spo2 = 0;
     }
     if (confidence < 60) {
         result.flags |= 0x04;
     }
 
-    float heart_band_ratio = periodicity_at_lag(window_ir, n, mean_ir,
-                                                 median_interval);
     publish_diag((float)rate, mean_ir, mean_red, ac_ir, ac_red,
                  heart_band_ratio, (float)confidence / 100.0f, result.flags);
 
