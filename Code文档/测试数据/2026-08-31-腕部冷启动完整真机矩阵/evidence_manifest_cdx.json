@@ -1,0 +1,42 @@
+[
+  {
+    "file": "extract_wrist_matrix_evidence_cdx.ps1",
+    "bytes": 19242,
+    "sha256": "A40BA4AD7F3F13445535ADDE3D1902ADF6ECF9CD4FDF3F76C443CBA5A9EDC3FB"
+  },
+  {
+    "file": "raw_serial_captures_cdx.json",
+    "bytes": 46599,
+    "sha256": "038C2A6618878ADB777E13FCCA6F638912AB7C1FF48557ABB55A1F60C688767D"
+  },
+  {
+    "file": "raw_serial_captures_cdx.log",
+    "bytes": 41384,
+    "sha256": "C3DA5E03D66133F7409F3C6ED0321EA77E3EFBD1C3A09D6A6E307BE6863D45FD"
+  },
+  {
+    "file": "frames_cdx.csv",
+    "bytes": 30061,
+    "sha256": "23CDE9AD6BDC0CCB03C1B74280A1369E8C7657A64E6444A8F448ECE207936D8C"
+  },
+  {
+    "file": "signal_diag_cdx.csv",
+    "bytes": 42648,
+    "sha256": "1FA287F0452197C2DFA4C295E35823DAFBF0AD1F0B099AEF0F8FB3DC1968FCD1"
+  },
+  {
+    "file": "capture_summary_cdx.csv",
+    "bytes": 2608,
+    "sha256": "B202B338CE19617677F19339DFC4735DD2D0C8BC927D5B20543D6CEC199C1AFD"
+  },
+  {
+    "file": "external_reference_cdx.csv",
+    "bytes": 1588,
+    "sha256": "2814FFD93EB53EF2BF8587C3A9BE8AFD391CF5C6398B4EA144E92B46BE2EFD2C"
+  },
+  {
+    "file": "README_cdx.md",
+    "bytes": 1940,
+    "sha256": "87240E6661BADF48CD3B04BA3F36C3081589BB3A71B06ECC3125C6C01BD48C29"
+  }
+]
