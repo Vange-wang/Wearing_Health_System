@@ -9,6 +9,7 @@ import json
 import logging
 import random
 import struct
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,12 @@ from .tts import TTSError
 from .router import HERMES, LIGHTWEIGHT, RAG, DATA
 
 logger = logging.getLogger("voice-bridge.pipeline")
+
+SNAPSHOT_TTL_SECONDS = 600
+CONTEXT_REPLY_MAX_CHARS = 500
+SNAPSHOT_ROUTES = frozenset((LIGHTWEIGHT, RAG, HERMES, DATA))
+REPLAY_NO_SNAPSHOT_TEXT = "刚才没有可以重复的内容哦，先跟我说说话吧。"
+CONTEXT_NO_SNAPSHOT_TEXT = "我有点没跟上，你是指哪件事呀？"
 
 
 def _timing_defaults() -> dict:
@@ -141,6 +148,10 @@ class StreamingPipeline:
         # Backward-compatible snapshot for direct callers that do not supply a
         # request record. HTTP routes always pass their own TimingRecord.
         self.timing: dict = {}
+        # ISSUE-0013：单设备进程内只保留最近一轮成功回复。锁内仅做 O(1)
+        # 复制/替换，绝不覆盖 LLM、TTS、RAG 等 I/O。
+        self._last_round_lock = threading.Lock()
+        self._last_round: dict | None = None
 
     def _prepare_timing(self, timing: TimingRecord | None) -> TimingRecord:
         record = timing or TimingRecord()
@@ -148,6 +159,49 @@ class StreamingPipeline:
         if timing is None:
             self.timing = record.as_dict()
         return record
+
+    def _read_last_round(self) -> dict | None:
+        """读取未过期的最近成功轮次快照。"""
+        now = time.monotonic()
+        with self._last_round_lock:
+            snapshot = self._last_round
+            if snapshot is None:
+                return None
+            if now - snapshot["last_ts"] > SNAPSHOT_TTL_SECONDS:
+                self._last_round = None
+                return None
+            return dict(snapshot)
+
+    def _commit_last_round(self, user_text: str, reply_text: str, route: str) -> None:
+        """在整轮帧成功产出后原子提交最近轮次。"""
+        if not reply_text or route not in SNAPSHOT_ROUTES:
+            return
+        snapshot = {
+            "last_user_text": user_text,
+            "last_reply_text": reply_text,
+            "last_route": route,
+            "last_ts": time.monotonic(),
+        }
+        with self._last_round_lock:
+            self._last_round = snapshot
+
+    @staticmethod
+    def _build_context_prompt(snapshot: dict, current_text: str) -> str:
+        """构造仅含上一轮且长度受限的 CONTEXT 提示，不负责记录日志。"""
+        return (
+            f"【上一轮】用户：{snapshot['last_user_text']}\n"
+            f"小V：{snapshot['last_reply_text'][:CONTEXT_REPLY_MAX_CHARS]}\n\n"
+            f"【本轮】用户：{current_text}"
+        )
+
+    def _build_context_data_reply(self) -> str:
+        """CONTEXT 延续 DATA：重报最新的全部新鲜字段，否则诚实降级。"""
+        if self.health is None:
+            return CONTEXT_NO_SNAPSHOT_TEXT
+        hr, spo2 = self.health.get_fresh_values(self.data_stale_seconds)
+        if hr is None and spo2 is None:
+            return CONTEXT_NO_SNAPSHOT_TEXT
+        return self._build_health_reply("")
 
     def _pick_ack(self, text: str) -> bytes | None:
         """慢路径安抚语：从 query 池随机轮换（避免连续重复）。
@@ -261,26 +315,84 @@ class StreamingPipeline:
         # ASR 近音词归一（血氧 → 血阳/学养/学样 同音误识别），路由前应用
         if self.router is not None:
             text = self.router.normalize_asr(text)
-        # 路由判定 + RAG 检索（长期 RAG，Spec §3 A2 四步规则）
+        followup_kind = (
+            self.router.classify_followup(text) if self.router is not None else None
+        )
+        last_round = self._read_last_round() if followup_kind is not None else None
+
+        # execution route 用于 timing 观测；response_route 决定沿用哪条现有响应链。
+        # REPLAY 和无快照回退均为纯本地路径：不检索 RAG、不路由、不调用 LLM。
+        local_followup = False
+        context_followup = followup_kind == "context" and last_round is not None
         rag_results: list[dict] = []
-        if self.rag is not None:
-            rag_results = self.rag.search(text, top_k=self.rag_top_k, score_threshold=self.rag_score_threshold)
-        route = self.router.route(text, bool(rag_results)) if self.router else HERMES
+        if followup_kind == "replay":
+            route = "replay"
+            response_route = "replay"
+            selected_llm = None
+            final_text = (
+                last_round["last_reply_text"]
+                if last_round is not None
+                else REPLAY_NO_SNAPSHOT_TEXT
+            )
+            timing["llm_backend"] = "replay" if last_round is not None else "template"
+            local_followup = True
+        elif followup_kind == "context" and last_round is None:
+            route = "context"
+            response_route = "context"
+            selected_llm = None
+            final_text = CONTEXT_NO_SNAPSHOT_TEXT
+            timing["llm_backend"] = "template"
+            local_followup = True
+        elif context_followup:
+            route = "context"
+            response_route = last_round["last_route"]
+            if response_route == DATA:
+                selected_llm = None
+                final_text = self._build_context_data_reply()
+                timing["llm_backend"] = "template"
+                local_followup = True
+            elif response_route == HERMES:
+                selected_llm = self.llm
+                final_text = self._build_context_prompt(last_round, text)
+                timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
+            else:
+                # LIGHTWEIGHT 与 RAG 都只调用轻量通道一次；RAG 不重新搜索、
+                # 不再次包装知识库参考前缀。
+                selected_llm = (
+                    self.lightweight_llm
+                    if self.lightweight_llm is not None
+                    else self.llm
+                )
+                final_text = self._build_context_prompt(last_round, text)
+                timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
+        else:
+            # 路由判定 + RAG 检索（长期 RAG，Spec §3 A2 四步规则）
+            if self.rag is not None:
+                rag_results = self.rag.search(
+                    text,
+                    top_k=self.rag_top_k,
+                    score_threshold=self.rag_score_threshold,
+                )
+            route = self.router.route(text, bool(rag_results)) if self.router else HERMES
+            response_route = route
+
         timing["route"] = route
 
-        if route == DATA:
+        if local_followup or context_followup:
+            pass
+        elif response_route == DATA:
             # P3 模板直答：不经 LLM，直接构造回答文本（确定性，防 LLM 读错数/编数，Spec §4.1）
             selected_llm = None
             final_text = self._build_health_reply(text)
             timing["llm_backend"] = "template"
-        elif route == HERMES:
+        elif response_route == HERMES:
             selected_llm = self.llm
             final_text = text
             timing["llm_backend"] = getattr(selected_llm, "name", "unknown")
         else:
             selected_llm = self.lightweight_llm if self.lightweight_llm is not None else self.llm
             final_text = text
-            if route == RAG and rag_results:
+            if response_route == RAG and rag_results:
                 ctx = "\n".join(
                     f"- {r['doc']['title']}: {r['doc']['text']}" for r in rag_results
                 )
@@ -291,7 +403,7 @@ class StreamingPipeline:
         # 慢路径（Hermes）首句 >2s 才到，预连接会空闲恶化（C3 实测 2s 空闲净等待反而变慢），
         # 且已有安抚语先行，故慢路径不预连。
         preconn_state = None
-        if route != HERMES and self.tts is not None and hasattr(self.tts, "open_preconnect"):
+        if response_route != HERMES and self.tts is not None and hasattr(self.tts, "open_preconnect"):
             preconn_state = {
                 "task": asyncio.create_task(self.tts.open_preconnect()),
                 "used": False,
@@ -310,7 +422,7 @@ class StreamingPipeline:
 
         # 轻量/DeepSeek 首步失败（USER.md 读失败 / 网络不可达）→ 降级慢路径（A2 兜底）
         # DATA 模板直答：不走 LLM，模板文本直接作为单段「流」（后面分句+TTS 复用）
-        if route == DATA:
+        if local_followup or response_route == DATA:
             delta_iter = iter([final_text])
         else:
             try:
@@ -318,10 +430,14 @@ class StreamingPipeline:
             except LLMError as e:
                 if selected_llm is not self.llm:
                     logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
-                    timing["route"] = HERMES
+                    if followup_kind is None:
+                        timing["route"] = HERMES
                     timing["llm_backend"] = getattr(self.llm, "name", "unknown")
                     selected_llm = self.llm  # 需求3：更新实际后端，避免误判提取
-                    delta_iter = await asyncio.to_thread(self.llm.stream_chat, text)
+                    fallback_text = final_text if context_followup else text
+                    delta_iter = await asyncio.to_thread(
+                        self.llm.stream_chat, fallback_text
+                    )
                     # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
                     if preconn_state is not None:
                         preconn_state["disabled"] = True
@@ -338,6 +454,7 @@ class StreamingPipeline:
         comfort_queued = False
         tts_wall_t0 = None
         total_sentences = [0]
+        delivery_failed = [False]
         assistant_parts: list[str] = []  # 需求3：收集 LLM 完整回复（回复完成后提取记忆）
 
         async def _claim_preconn():
@@ -354,7 +471,7 @@ class StreamingPipeline:
                 return None
 
         async def _drain_stream(seg_iter, seq, kind, t0):
-            """流式产帧到 frame_queue。返回 (seg_i, last_seg, emitted_any)。
+            """流式产帧到 frame_queue。返回 (seg_i, last_seg, emitted_any, completed)。
 
             emitted_any=False 表示首段未产出即失败，调用方可回退重合成。
             """
@@ -362,6 +479,7 @@ class StreamingPipeline:
             seg_i = 0
             last_seg = None
             emitted_any = False
+            completed = True
             try:
                 async for seg_wav in seg_iter:
                     if not tts_first_recorded:
@@ -373,8 +491,9 @@ class StreamingPipeline:
                         seg_i += 1
                     last_seg = seg_wav
             except TTSError as e:
+                completed = False
                 logger.error("TTS 流式合成失败: %s", e)
-            return seg_i, last_seg, emitted_any
+            return seg_i, last_seg, emitted_any, completed
 
         async def _worker():
             nonlocal tts_first_recorded, tts_wall_t0
@@ -396,23 +515,28 @@ class StreamingPipeline:
                         if hasattr(self.tts, "stream_synthesize"):
                             logger.info("worker: 开始 TTS 合成 seq=%s kind=%s", seq, kind)
                             if preconn is not None:
-                                seg_i, last_seg, ok = await _drain_stream(
+                                seg_i, last_seg, emitted, completed = await _drain_stream(
                                     preconn.stream_synthesize(sentence), seq, kind, t0
                                 )
                                 await preconn.close()
-                                if not ok:
+                                if not emitted:
                                     logger.warning("预连接首句失败，回退用时建连重合成")
-                                    seg_i, last_seg, _ = await _drain_stream(
+                                    seg_i, last_seg, _, completed = await _drain_stream(
                                         self.tts.stream_synthesize(sentence), seq, kind, t0
                                     )
+                                elif not completed:
+                                    delivery_failed[0] = True
                             else:
-                                seg_i, last_seg, _ = await _drain_stream(
+                                seg_i, last_seg, _, completed = await _drain_stream(
                                     self.tts.stream_synthesize(sentence), seq, kind, t0
                                 )
+                            if not completed:
+                                delivery_failed[0] = True
                             logger.info("worker: TTS 合成完成 seq=%s seg_i=%s", seq, seg_i)
                             if last_seg is not None:
                                 await frame_queue.put(((seq, seg_i), kind, last_seg, True))
                             else:
+                                delivery_failed[0] = True
                                 await frame_queue.put(((seq, 0), kind, None, True))
                         else:
                             wav = await self.tts.synthesize(sentence)
@@ -426,6 +550,7 @@ class StreamingPipeline:
                     except Exception as e:
                         # Always complete the claimed sequence so the reorder
                         # loop can advance instead of waiting forever.
+                        delivery_failed[0] = True
                         logger.exception("并发合成 TTS 异常（跳过该句）: %s", e)
                         await frame_queue.put(((seq, 0), kind, None, True))
             finally:
@@ -439,7 +564,7 @@ class StreamingPipeline:
 
             # ISSUE-0001 修复：慢路径（Hermes）路由判定后立即发安抚语，不等首 token。
             # 慢路径由 tool_keywords 触发 → _pick_ack 命中 query 池（「稍等，我帮你查一下」）。
-            if route == HERMES:
+            if response_route == HERMES:
                 ack_wav = self._pick_ack(text)
                 if ack_wav is not None:
                     await frame_queue.put(((seq, 0), "comfort", ack_wav, True))
@@ -549,11 +674,11 @@ class StreamingPipeline:
         await producer_task
         for w in workers:
             await w
+        reply_text = "".join(assistant_parts).strip()
         # 需求3（改造）：回复完成后统一触发记忆提取（全自动，每轮必做，不依赖流正常结束）。
         # 覆盖 lightweight/rag 路由（DeepSeek 提取）；hermes 慢路径 Hermes 自带 persistent
         # memory（豁免），DATA 模板直答无用户新信息（豁免）。
         if selected_llm is not None and selected_llm is self.lightweight_llm and hasattr(selected_llm, "extract_memory_async"):
-            reply_text = "".join(assistant_parts).strip()
             if reply_text:
                 selected_llm.extract_memory_async(text, reply_text)
         # 方向1：预连接未被消费则关闭（降级慢路径 / 预连接失败 / 无正文句场景，避免连接泄漏）
@@ -581,6 +706,15 @@ class StreamingPipeline:
             timing["tool_ms"] = (timing["asr_ms"] or 0) + first_content_ms
         else:
             timing["tool_ms"] = 0
+        # 只有普通轮次在所有响应帧成功产出并完成收尾后覆盖快照。
+        # REPLAY/无快照回退不创建、不刷新快照。
+        snapshot_commit_allowed = not delivery_failed[0] and total_frames > 0
+        if followup_kind is None and snapshot_commit_allowed:
+            self._commit_last_round(text, reply_text, timing["route"])
+        elif context_followup and snapshot_commit_allowed:
+            self._commit_last_round(
+                text, reply_text, last_round["last_route"]
+            )
         logger.info(json.dumps({
             "event": "stream_done",
             **{k: v for k, v in timing.items() if v is not None},

@@ -1,0 +1,333 @@
+2026-09-01T15:24:03.2172333+08:00 [0;32mI (602072) ble_central: ??? seq=58 HR=0 SpO2=0 conf=0 fla[0;32mI (1115472) ble_central: ??? seq=160 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:03.2449476+08:00 [0;32mI (1115472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:03.2456350+08:00 [0m
+2026-09-01T15:24:03.2460122+08:00 [0;32mI (1115472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:03.2462881+08:00 [0m
+2026-09-01T15:24:08.2325767+08:00 [0;32mI (1120472) ble_central: ??? seq=161 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:08.2335903+08:00 [0;32mI (1120472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:08.2338745+08:00 [0m
+2026-09-01T15:24:08.2340501+08:00 [0;32mI (1120472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:08.2342092+08:00 [0m
+2026-09-01T15:24:13.1992621+08:00 [0;32mI (1125472) ble_central: ??? seq=162 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:13.1995328+08:00 [0;32mI (1125472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:13.1996685+08:00 [0m
+2026-09-01T15:24:13.1997610+08:00 [0;32mI (1125482) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:13.1998610+08:00 [0m
+2026-09-01T15:24:18.2689294+08:00 [0;32mI (1130472) ble_central: ??? seq=163 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:18.2694500+08:00 [0;32mI (1130472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:18.2697094+08:00 [0m
+2026-09-01T15:24:18.2698340+08:00 [0;32mI (1130472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:18.2699512+08:00 [0m
+2026-09-01T15:24:23.3894952+08:00 [0;32mI (1135672) ble_central: ??? seq=164 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:23.3899684+08:00 [0;32mI (1135672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:23.3900644+08:00 [0m
+2026-09-01T15:24:23.3901129+08:00 [0;32mI (1135672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:23.3901692+08:00 [0m
+2026-09-01T15:24:28.4429464+08:00 [0;32mI (1140672) ble_central: ??? seq=165 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:28.4435858+08:00 [0;32mI (1140672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:28.4437330+08:00 [0m
+2026-09-01T15:24:28.4438130+08:00 [0;32mI (1140672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:28.4439410+08:00 [0m
+2026-09-01T15:24:33.4255856+08:00 [0;32mI (1145672) ble_central: ??? seq=166 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:33.4262179+08:00 [0;32mI (1145672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:33.4266676+08:00 [0m
+2026-09-01T15:24:33.4267851+08:00 [0;32mI (1145672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:33.4269047+08:00 [0m
+2026-09-01T15:24:38.4754307+08:00 [0;32mI (1150672) ble_central: ??? seq=167 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:38.4756992+08:00 [0;32mI (1150672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:38.4758330+08:00 [0m
+2026-09-01T15:24:38.4759422+08:00 [0;32mI (1150682) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:38.4760595+08:00 [0m
+2026-09-01T15:24:43.6676725+08:00 [0;32mI (1155872) ble_central: ??? seq=168 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:43.6679672+08:00 [0;32mI (1155872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:43.6681167+08:00 [0m
+2026-09-01T15:24:43.6683730+08:00 [0;32mI (1155882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:43.6686265+08:00 [0m
+2026-09-01T15:24:48.6370775+08:00 [0;32mI (1160872) ble_central: ??? seq=169 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:48.6381935+08:00 [0;32mI (1160872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:48.6384486+08:00 [0m
+2026-09-01T15:24:48.6386052+08:00 [0;32mI (1160872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:48.6387603+08:00 [0m
+2026-09-01T15:24:53.6781904+08:00 [0;32mI (1165872) ble_central: ??? seq=170 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:53.6784332+08:00 [0;32mI (1165872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:53.6785848+08:00 [0m
+2026-09-01T15:24:53.6786755+08:00 [0;32mI (1165882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:53.6787716+08:00 [0m
+2026-09-01T15:24:58.8751024+08:00 [0;32mI (1171072) ble_central: ??? seq=171 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:24:58.8753234+08:00 [0;32mI (1171072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:58.8755686+08:00 [0m
+2026-09-01T15:24:58.9825847+08:00 [0;32mI (1171272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:24:58.9828039+08:00 [0m
+2026-09-01T15:25:03.6474320+08:00 [0;32mI (1175872) ble_central: ??? seq=172 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:03.6477212+08:00 [0;32mI (1175872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:03.6478624+08:00 [0m
+2026-09-01T15:25:03.6479661+08:00 [0;32mI (1175872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:03.6480725+08:00 [0m
+2026-09-01T15:25:08.5872022+08:00 [0;32mI (1180872) ble_central: ??? seq=173 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:08.5873811+08:00 [0;32mI (1180872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:08.5874771+08:00 [0m
+2026-09-01T15:25:08.8055768+08:00 [0;32mI (1181072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:08.8059925+08:00 [0m
+2026-09-01T15:25:14.0012503+08:00 [0;32mI (1186272) ble_central: ??? seq=174 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:14.0015557+08:00 [0;32mI (1186272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:14.0017087+08:00 [0m
+2026-09-01T15:25:14.2308030+08:00 [0;32mI (1186472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:14.2310056+08:00 [0m
+2026-09-01T15:25:18.8060768+08:00 [0;32mI (1191072) ble_central: ??? seq=175 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:18.8063171+08:00 [0;32mI (1191072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:18.8064438+08:00 [0m
+2026-09-01T15:25:18.8065384+08:00 [0;32mI (1191072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:18.8215121+08:00 [0m
+2026-09-01T15:25:23.8301251+08:00 [0;32mI (1196072) ble_central: ??? seq=176 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:23.8303647+08:00 [0;32mI (1196072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:23.8305006+08:00 [0m
+2026-09-01T15:25:23.8309978+08:00 [0;32mI (1196082) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:23.8311638+08:00 [0m
+2026-09-01T15:25:28.7810555+08:00 [0;32mI (1201072) ble_central: ??? seq=177 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:28.7812810+08:00 [0;32mI (1201072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:28.7815794+08:00 [0m
+2026-09-01T15:25:28.7817012+08:00 [0;32mI (1201072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:28.7818115+08:00 [0m
+2026-09-01T15:25:32.5369425+08:00 [0;32mI (1204752) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:25:32.7639512+08:00 [0;32mI (1205062) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:25:32.7642114+08:00 [0;32mI (1205062) voice_agent: >> TALK START[0m
+2026-09-01T15:25:33.7818624+08:00 [0;32mI (1205132) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:25:33.7821874+08:00 [0;32mI (1206072) ble_central: ??? seq=178 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:33.7823490+08:00 [0;32mI (1206072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:33.7824536+08:00 [0m
+2026-09-01T15:25:33.7825444+08:00 [0;32mI (1206082) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:33.7826487+08:00 [0m
+2026-09-01T15:25:33.9969223+08:00 [0;32mI (1206212) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:25:33.9971148+08:00 [0;32mI (1206212) voice_agent: REC+UPLOAD END, pcm bytes=47104[0m
+2026-09-01T15:25:35.3088666+08:00 [0;32mI (1207582) voice_agent: HTTP status=200[0m
+2026-09-01T15:25:35.3298950+08:00 [0;32mI (1207582) voice_agent: LATENCY release_to_codec_us=1374009[0m
+2026-09-01T15:25:39.1807685+08:00 [0;32mI (1211472) ble_central: ??? seq=179 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:39.1810398+08:00 [0;32mI (1211472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:39.1811890+08:00 [0m
+2026-09-01T15:25:39.1812962+08:00 [0;32mI (1211472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:39.1814142+08:00 [0m
+2026-09-01T15:25:40.4981419+08:00 [0;32mI (1212762) voice_agent: PLAY DONE, frames=17[0m
+2026-09-01T15:25:40.5003445+08:00 [0;32mI (1212762) voice_agent: talk stack high-water remaining=1620 bytes[0m
+2026-09-01T15:25:40.5005109+08:00 [0;32mI (1212762) voice_agent: << TALK DONE[0m
+2026-09-01T15:25:43.9911681+08:00 [0;32mI (1216272) ble_central: ??? seq=180 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:43.9914325+08:00 [0;32mI (1216272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:43.9915698+08:00 [0m
+2026-09-01T15:25:43.9916702+08:00 [0;32mI (1216282) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:43.9917580+08:00 [0m
+2026-09-01T15:25:49.0245281+08:00 [0;32mI (1221272) ble_central: ??? seq=181 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:49.0247999+08:00 [0;32mI (1221272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:49.0249383+08:00 [0m
+2026-09-01T15:25:49.0250380+08:00 [0;32mI (1221272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:49.0251500+08:00 [0m
+2026-09-01T15:25:49.1328452+08:00 [0;32mI (1221432) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:25:49.4713278+08:00 [0;32mI (1221742) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:25:49.4715271+08:00 [0;32mI (1221742) voice_agent: >> TALK START[0m
+2026-09-01T15:25:50.4526257+08:00 [0;32mI (1221842) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:25:50.4528083+08:00 [0;32mI (1222732) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:25:50.4529198+08:00 [0;32mI (1222752) voice_agent: REC+UPLOAD END, pcm bytes=43008[0m
+2026-09-01T15:25:52.1968518+08:00 [0;32mI (1224472) voice_agent: HTTP status=200[0m
+2026-09-01T15:25:52.1976415+08:00 [0;32mI (1224482) voice_agent: LATENCY release_to_codec_us=1744740[0m
+2026-09-01T15:25:53.9728849+08:00 [0;32mI (1226272) ble_central: ??? seq=182 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:53.9731127+08:00 [0;32mI (1226272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:53.9732911+08:00 [0m
+2026-09-01T15:25:53.9734188+08:00 [0;32mI (1226272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:53.9735703+08:00 [0m
+2026-09-01T15:25:57.9259444+08:00 [0;32mI (1230222) voice_agent: PLAY DONE, frames=18[0m
+2026-09-01T15:25:57.9278427+08:00 [0;32mI (1230222) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:25:57.9282217+08:00 [0;32mI (1230222) voice_agent: << TALK DONE[0m
+2026-09-01T15:25:59.0342797+08:00 [0;32mI (1231272) ble_central: ??? seq=183 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:25:59.0345054+08:00 [0;32mI (1231272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:59.0346135+08:00 [0m
+2026-09-01T15:25:59.0346951+08:00 [0;32mI (1231282) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:25:59.0347853+08:00 [0m
+2026-09-01T15:25:59.9096323+08:00 [0;32mI (1232152) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:26:00.2321981+08:00 [0;32mI (1232462) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:26:00.2324306+08:00 [0;32mI (1232462) voice_agent: >> TALK START[0m
+2026-09-01T15:26:01.4491347+08:00 [0;32mI (1232482) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:26:01.4493665+08:00 [0;32mI (1233702) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:26:01.4494951+08:00 [0;32mI (1233712) voice_agent: REC+UPLOAD END, pcm bytes=51200[0m
+2026-09-01T15:26:02.8693442+08:00 [0;32mI (1235132) voice_agent: HTTP status=200[0m
+2026-09-01T15:26:02.8705223+08:00 [0;32mI (1235132) voice_agent: LATENCY release_to_codec_us=1436332[0m
+2026-09-01T15:26:04.1782758+08:00 [0;32mI (1236472) ble_central: ??? seq=184 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:04.1785586+08:00 [0;32mI (1236472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:04.1786795+08:00 [0m
+2026-09-01T15:26:04.1787786+08:00 [0;32mI (1236482) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:04.1788880+08:00 [0m
+2026-09-01T15:26:04.8448772+08:00 [0;32mI (1237072) voice_agent: PLAY DONE, frames=1[0m
+2026-09-01T15:26:04.8457805+08:00 [0;32mI (1237072) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:26:04.8460506+08:00 [0;32mI (1237072) voice_agent: << TALK DONE[0m
+2026-09-01T15:26:05.9316857+08:00 [0;32mI (1238132) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:26:06.1500543+08:00 [0;32mI (1238432) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:26:06.1502734+08:00 [0;32mI (1238432) voice_agent: >> TALK START[0m
+2026-09-01T15:26:07.0300332+08:00 [0;32mI (1238502) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:26:07.0302078+08:00 [0;33mW (1239332) voice_agent: capture ring full: accepted=0/1024[0m
+2026-09-01T15:26:07.4628018+08:00 [0;32mI (1239732) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:26:07.4629767+08:00 [0;32mI (1239742) voice_agent: REC+UPLOAD END, pcm bytes=51200[0m
+2026-09-01T15:26:08.6709664+08:00 [0;32mI (1240872) voice_agent: HTTP status=200[0m
+2026-09-01T15:26:08.6723596+08:00 [0;32mI (1240872) voice_agent: LATENCY release_to_codec_us=1140030[0m
+2026-09-01T15:26:09.6725744+08:00 [0;32mI (1241872) ble_central: ??? seq=185 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:09.6727410+08:00 [0;32mI (1241872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:09.6728233+08:00 [0m
+2026-09-01T15:26:09.7819225+08:00 [0;32mI (1242072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:09.7821982+08:00 [0m
+2026-09-01T15:26:14.1952148+08:00 [0;32mI (1246472) ble_central: ??? seq=186 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:14.1954124+08:00 [0;32mI (1246472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:14.1955230+08:00 [0m
+2026-09-01T15:26:14.1956079+08:00 [0;32mI (1246472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:14.1957086+08:00 [0m
+2026-09-01T15:26:14.3026159+08:00 [0;32mI (1246522) voice_agent: PLAY DONE, frames=18[0m
+2026-09-01T15:26:14.3034692+08:00 [0;32mI (1246522) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:26:14.3036474+08:00 [0;32mI (1246522) voice_agent: << TALK DONE[0m
+2026-09-01T15:26:16.7362660+08:00 [0;32mI (1248942) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:26:16.9519663+08:00 [0;32mI (1249252) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:26:16.9521896+08:00 [0;32mI (1249252) voice_agent: >> TALK START[0m
+2026-09-01T15:26:18.3753073+08:00 [0;32mI (1249362) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:26:18.3755467+08:00 [0;32mI (1250622) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:26:18.4883042+08:00 [0;32mI (1250702) voice_agent: REC+UPLOAD END, pcm bytes=55296[0m
+2026-09-01T15:26:19.2418714+08:00 [0;32mI (1251472) ble_central: ??? seq=187 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:19.2420919+08:00 [0;32mI (1251472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:19.2422139+08:00 [0m
+2026-09-01T15:26:19.2423481+08:00 [0;32mI (1251472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:19.2424514+08:00 [0m
+2026-09-01T15:26:19.8141109+08:00 [0;32mI (1252022) voice_agent: HTTP status=200[0m
+2026-09-01T15:26:19.8148765+08:00 [0;32mI (1252032) voice_agent: LATENCY release_to_codec_us=1409498[0m
+2026-09-01T15:26:24.2084278+08:00 [0;32mI (1256472) ble_central: ??? seq=188 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:24.2086699+08:00 [0;32mI (1256472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:24.2087921+08:00 [0m
+2026-09-01T15:26:24.2089193+08:00 [0;32mI (1256472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:24.2090337+08:00 [0m
+2026-09-01T15:26:26.8902423+08:00 [0;32mI (1259182) voice_agent: PLAY DONE, frames=22[0m
+2026-09-01T15:26:26.8911883+08:00 [0;32mI (1259182) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:26:26.8913607+08:00 [0;32mI (1259192) voice_agent: << TALK DONE[0m
+2026-09-01T15:26:29.4082744+08:00 [0;32mI (1261672) ble_central: ??? seq=189 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:29.4084994+08:00 [0;32mI (1261672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:29.4086151+08:00 [0m
+2026-09-01T15:26:29.4087099+08:00 [0;32mI (1261672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:29.4088143+08:00 [0m
+2026-09-01T15:26:34.4655790+08:00 [0;32mI (1266672) ble_central: ??? seq=190 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:34.4658335+08:00 [0;32mI (1266672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:34.4659690+08:00 [0m
+2026-09-01T15:26:34.4660659+08:00 [0;32mI (1266672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:34.4661618+08:00 [0m
+2026-09-01T15:26:39.6445030+08:00 [0;32mI (1271872) ble_central: ??? seq=191 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:39.6448274+08:00 [0;32mI (1271872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:39.6449951+08:00 [0m
+2026-09-01T15:26:39.6454695+08:00 [0;32mI (1271882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:39.6457157+08:00 [0m
+2026-09-01T15:26:44.3740343+08:00 [0;32mI (1276672) ble_central: ??? seq=192 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:44.3742623+08:00 [0;32mI (1276672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:44.3743712+08:00 [0m
+2026-09-01T15:26:44.3744533+08:00 [0;32mI (1276672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:44.3745420+08:00 [0m
+2026-09-01T15:26:44.8081342+08:00 [0;32mI (1277052) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:26:45.1369450+08:00 [0;32mI (1277362) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:26:45.1371190+08:00 [0;32mI (1277362) voice_agent: >> TALK START[0m
+2026-09-01T15:26:46.4968866+08:00 [0;32mI (1277422) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:26:46.4970601+08:00 [0;32mI (1278792) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:26:46.4971652+08:00 [0;32mI (1278792) voice_agent: REC+UPLOAD END, pcm bytes=57344[0m
+2026-09-01T15:26:47.9353163+08:00 [0;32mI (1280212) voice_agent: HTTP status=200[0m
+2026-09-01T15:26:47.9363024+08:00 [0;32mI (1280212) voice_agent: LATENCY release_to_codec_us=1416848[0m
+2026-09-01T15:26:49.4644893+08:00 [0;32mI (1281672) ble_central: ??? seq=193 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:49.4646636+08:00 [0;32mI (1281672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:49.4647617+08:00 [0m
+2026-09-01T15:26:49.4648616+08:00 [0;32mI (1281672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:49.4649480+08:00 [0m
+2026-09-01T15:26:54.6165409+08:00 [0;32mI (1286872) ble_central: ??? seq=194 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:54.6167397+08:00 [0;32mI (1286872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:54.6168470+08:00 [0m
+2026-09-01T15:26:54.6169322+08:00 [0;32mI (1286882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:54.6170203+08:00 [0m
+2026-09-01T15:26:56.0526698+08:00 [0;32mI (1288342) voice_agent: PLAY DONE, frames=26[0m
+2026-09-01T15:26:56.0538196+08:00 [0;32mI (1288342) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:26:56.0539999+08:00 [0;32mI (1288342) voice_agent: << TALK DONE[0m
+2026-09-01T15:26:59.3391559+08:00 [0;32mI (1291602) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:26:59.6655765+08:00 [0;32mI (1291872) ble_central: ??? seq=195 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:26:59.6657556+08:00 [0;32mI (1291872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:59.6658630+08:00 [0m
+2026-09-01T15:26:59.6662570+08:00 [0;32mI (1291872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:26:59.6664282+08:00 [0m
+2026-09-01T15:26:59.6665261+08:00 [0;32mI (1291912) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:26:59.6666308+08:00 [0;32mI (1291912) voice_agent: >> TALK START[0m
+2026-09-01T15:27:00.9793322+08:00 [0;32mI (1291962) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:27:00.9795112+08:00 [0;32mI (1293272) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:27:01.0898459+08:00 [0;32mI (1293312) voice_agent: REC+UPLOAD END, pcm bytes=55296[0m
+2026-09-01T15:27:02.3382935+08:00 [0;32mI (1294622) voice_agent: HTTP status=200[0m
+2026-09-01T15:27:02.3391211+08:00 [0;32mI (1294622) voice_agent: LATENCY release_to_codec_us=1353303[0m
+2026-09-01T15:27:04.6479947+08:00 [0;32mI (1296872) ble_central: ??? seq=196 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:04.6484366+08:00 [0;32mI (1296872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:04.6489312+08:00 [0m
+2026-09-01T15:27:04.6490726+08:00 [0;32mI (1296872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:04.6491651+08:00 [0m
+2026-09-01T15:27:09.7926119+08:00 [0;32mI (1302072) ble_central: ??? seq=197 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:09.7927695+08:00 [0;32mI (1302072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:09.7928544+08:00 [0m
+2026-09-01T15:27:09.7929242+08:00 [0;32mI (1302072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:09.7930076+08:00 [0m
+2026-09-01T15:27:10.3381190+08:00 [0;32mI (1302592) voice_agent: PLAY DONE, frames=25[0m
+2026-09-01T15:27:10.3390863+08:00 [0;32mI (1302592) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:27:10.3392563+08:00 [0;32mI (1302592) voice_agent: << TALK DONE[0m
+2026-09-01T15:27:12.2148217+08:00 [0;32mI (1304422) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:27:12.4354983+08:00 [0;32mI (1304732) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:27:12.4356886+08:00 [0;32mI (1304732) voice_agent: >> TALK START[0m
+2026-09-01T15:27:13.9709480+08:00 [0;32mI (1304762) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:27:13.9711371+08:00 [0;32mI (1306202) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:27:14.0804926+08:00 [0;32mI (1306292) voice_agent: REC+UPLOAD END, pcm bytes=57344[0m
+2026-09-01T15:27:14.6242203+08:00 [0;32mI (1306872) ble_central: ??? seq=198 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:14.6244092+08:00 [0;32mI (1306872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:14.6245095+08:00 [0m
+2026-09-01T15:27:14.6245872+08:00 [0;32mI (1306882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:14.6246702+08:00 [0m
+2026-09-01T15:27:16.1526948+08:00 [0;32mI (1308372) voice_agent: HTTP status=200[0m
+2026-09-01T15:27:16.1536721+08:00 [0;32mI (1308372) voice_agent: LATENCY release_to_codec_us=2171783[0m
+2026-09-01T15:27:19.8680506+08:00 [0;32mI (1312072) ble_central: ??? seq=199 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:19.8682486+08:00 [0;32mI (1312072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:19.8683554+08:00 [0m
+2026-09-01T15:27:19.8684317+08:00 [0;32mI (1312072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:19.8685160+08:00 [0m
+2026-09-01T15:27:24.8005801+08:00 [0;32mI (1317072) ble_central: ??? seq=200 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:24.8008081+08:00 [0;32mI (1317072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:24.8009167+08:00 [0m
+2026-09-01T15:27:24.8010003+08:00 [0;32mI (1317072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:24.8010898+08:00 [0m
+2026-09-01T15:27:27.7680097+08:00 [0;32mI (1320042) voice_agent: PLAY DONE, frames=35[0m
+2026-09-01T15:27:27.7687531+08:00 [0;32mI (1320042) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:27:27.7689154+08:00 [0;32mI (1320042) voice_agent: << TALK DONE[0m
+2026-09-01T15:27:29.3049102+08:00 [0;32mI (1321552) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:27:29.6462001+08:00 [0;32mI (1321862) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:27:29.6464421+08:00 [0;32mI (1321862) voice_agent: >> TALK START[0m
+2026-09-01T15:27:29.8753409+08:00 [0;32mI (1321872) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:27:29.8755336+08:00 [0;32mI (1322072) ble_central: ??? seq=201 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:29.8756772+08:00 [0;32mI (1322072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:29.8757894+08:00 [0m
+2026-09-01T15:27:29.8758760+08:00 [0;32mI (1322072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:29.8759701+08:00 [0m
+2026-09-01T15:27:30.8578921+08:00 [0;32mI (1323072) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:27:30.8580710+08:00 [0;32mI (1323122) voice_agent: REC+UPLOAD END, pcm bytes=49152[0m
+2026-09-01T15:27:32.6562808+08:00 [0;32mI (1324942) voice_agent: HTTP status=200[0m
+2026-09-01T15:27:32.6569312+08:00 [0;32mI (1324942) voice_agent: LATENCY release_to_codec_us=1873534[0m
+2026-09-01T15:27:35.0660817+08:00 [0;32mI (1327272) ble_central: ??? seq=202 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:35.0663082+08:00 [0;32mI (1327272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:35.0664395+08:00 [0m
+2026-09-01T15:27:35.0665359+08:00 [0;32mI (1327272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:35.0667771+08:00 [0m
+2026-09-01T15:27:39.8143483+08:00 [0;32mI (1332072) ble_central: ??? seq=203 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:39.8145578+08:00 [0;32mI (1332072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:39.8146644+08:00 [0m
+2026-09-01T15:27:39.8147507+08:00 [0;32mI (1332072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:39.8148928+08:00 [0m
+2026-09-01T15:27:41.4567261+08:00 [0;32mI (1333702) voice_agent: PLAY DONE, frames=27[0m
+2026-09-01T15:27:41.4573927+08:00 [0;32mI (1333702) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:27:41.4575417+08:00 [0;32mI (1333702) voice_agent: << TALK DONE[0m
+2026-09-01T15:27:42.2263626+08:00 [0;32mI (1334512) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:27:42.5664061+08:00 [0;32mI (1334822) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:27:42.5667632+08:00 [0;32mI (1334822) voice_agent: >> TALK START[0m
+2026-09-01T15:27:43.8703269+08:00 [0;32mI (1334872) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:27:43.8705265+08:00 [0;32mI (1336152) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:27:43.9788424+08:00 [0;32mI (1336232) voice_agent: REC+UPLOAD END, pcm bytes=53248[0m
+2026-09-01T15:27:44.9706850+08:00 [0;32mI (1337272) ble_central: ??? seq=204 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:27:44.9711837+08:00 [0;32mI (1337272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:44.9715629+08:00 [0m
+2026-09-01T15:27:44.9716847+08:00 [0;32mI (1337272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:27:44.9717813+08:00 [0m
+2026-09-01T15:27:45.1854731+08:00 [0;32mI (1337462) voice_agent: HTTP status=200[0m
+2026-09-01T15:27:45.2946121+08:00 [0;32mI (1337532) voice_agent: LATENCY release_to_codec_us=1379098[0m

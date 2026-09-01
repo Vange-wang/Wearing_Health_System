@@ -20,7 +20,6 @@
 | `ISSUE-0010` | 会话级路由记忆（指代追问延续慢路径） | feature / routing | open | P2 | WorkBuddy / Hermes | 上轮慢路径→本轮指代追问延续慢路径 + 端到端验证真查 |
 | `ISSUE-0011` | TTS 情感表达换引擎立项 | future improvement | open | P3 | WorkBuddy / Hermes | 引擎选型评估（chat 风格/情感）立项，edge 免费端点不支持 express-as（实测） |
 | `ISSUE-0012` | 语义分级停顿（话题切换更长停顿） | feature | open | P3 | WorkBuddy / Hermes | 话题切换停顿 ≥0.5s 且普通句间不劣化；Spec 补条目 + 真机听感确认（句间连读修复 Spec §4 承诺的后续项，zcode 补登记） |
-| `ISSUE-0013` | 跨路径上下文联动断裂（"重新说一遍"丢上下文） | bug | open | P1 | zcode / Hermes | 慢路径后指代追问（重新说一遍/再说一遍）不丢上下文；新增路由用例 + 全量单测通过（真机 2026-08-21 复现，任务单 `zcode_tasks/2026-08-21-跨路径上下文联动-任务单_hm.md`） |
 
 ## Closed Issue
 
@@ -28,6 +27,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `ISSUE-0007` | 流式 ASR 个别字词识别不够清晰 | accuracy | closed | P2 | 尾静音截断根因 + 15/15 标准发音（真人发音转 ISSUE-0009） |
 | `ISSUE-0008` | 多轮对话上下文无法联立 | feature | closed | P2 | 滑动窗口会话历史 + 三轮指代消解验证 |
+| `ISSUE-0013` | 跨路径上下文联动断裂（"重新说一遍"丢上下文） | bug | closed | P1 | 真机行为（生日→REPLAY 复述 / 天气→CONTEXT 延续不答非所问）+ 设备侧首字 N=10 中位数 1391.754ms < 红线 1484.589ms + 全量 195 passed/5 skipped/1 warning + Hermes R3 与关闭裁决双重复核（裁决报告 `审查报告/2026-09-01-ISSUE-0013-BOX3真机验收与关闭裁决_hm.md`） |
 
 ## Withdrawn Issue
 

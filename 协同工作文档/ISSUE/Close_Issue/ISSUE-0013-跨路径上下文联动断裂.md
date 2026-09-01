@@ -4,7 +4,7 @@
 
 - Issue ID：ISSUE-0013
 - 类型：bug（多轮对话体验）
-- 状态：open
+- 状态：**closed**
 - 优先级：P1
 - 来源：真机复现（2026-08-21 01:27:15→01:27:33）+ 任务单 `zcode_tasks/2026-08-21-跨路径上下文联动-任务单_hm.md`
 - owner：zcode（实现）/ Hermes（审查）
@@ -37,3 +37,20 @@
 - 真机「我的生日是什么时候」→「重新说一遍」→ 再次答出生日（不丢上下文）；
 - 慢路径搜索后指代追问不答非所问；
 - 全量单测通过 + 新增路由用例（"重新说一遍"= followup）。
+
+## 关闭记录
+
+- 关闭时间：2026-09-01
+- 关闭依据（四条全部满足，证据可复读）：
+  1. 实现完成：router.py（`classify_followup` + REPLAY/CONTEXT 复合短语）/ pipeline.py（单轮 600s TTL 快照 + REPLAY 重播 + CONTEXT 四路闭合），Hermes R3 独立审查 PASS（SERIOUS 0 / NON_SERIOUS 0，OI-1/OI-2/OI-3 全 CLOSED）；
+  2. 自动化自测：全量 `pytest tests -q` = 195 passed / 5 skipped / 1 warning（Hermes 关闭裁决时独立重跑一致），相对基线新增 23 测试、0 fail；
+  3. BOX-3 真机行为：生日（route=rag）→「重新说一遍」（route=replay，llm_backend=replay，零二次 LLM、无安抚语）复述相同生日；天气（route=hermes）→「刚才那个呢」（route=context）延续天气回答、不答非所问（原始日志 `验收与澄清/2026-09-01-ISSUE-0013-BOX3真机验收原始数据_cdx/`）；
+  4. 设备侧首字主门：固定口令「你好」有效 N=10 中位数 1391.754ms < 冻结红线 1484.589ms，余量 92.835ms，普通路径无回退（P95 2037.571ms 如实保留为长尾记录）。
+- 最终裁决：Hermes session `20260901_155843_9f8136`，报告 `审查报告/2026-09-01-ISSUE-0013-BOX3真机验收与关闭裁决_hm.md`。
+
+## 处理记录
+
+- 2026-08-21：真机复现登记（Hermes），任务单 `zcode_tasks/2026-08-21-跨路径上下文联动-任务单_hm.md`。
+- 2026-09-01：实现 + 自测（Codex，_cdx）；Hermes R1/R2/R3 三轮审查（R3 PASS）。
+- 2026-09-01：BOX-3 真机语音与首字验收（Codex/Vange，_cdx）。
+- 2026-09-01：Hermes 最终关闭裁决，转 closed（session `20260901_155843_9f8136`）。

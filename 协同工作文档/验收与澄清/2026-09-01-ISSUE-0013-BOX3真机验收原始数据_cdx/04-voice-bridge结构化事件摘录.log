@@ -1,0 +1,51 @@
+ISSUE-0013 BOX-3 真机验收服务端结构化事件摘录
+时区：Asia/Shanghai (+08:00)
+说明：仅保留 ASR、路由和结构化 timing；不保留回答全文、上下文前缀、密钥或个人生日值。
+
+[旧进程诊断；不计入正式验收]
+voice-bridge PID 12592 StartTime=2026-09-01 13:48:37
+router.py LastWriteTime=2026-09-01 13:54:25
+pipeline.py LastWriteTime=2026-09-01 14:03:58
+2026-09-01 15:09:36 route=hermes llm_backend=hermes first_frame_ready_ms=115 device_release_to_codec_ms=337.644 user_result=answered_birthday
+2026-09-01 15:12:10 ASR="重新说一遍" route=lightweight llm_backend=deepseek first_frame_ready_ms=1906 device_release_to_codec_ms=2030.159 user_result=asked_what_to_repeat
+
+[服务重载]
+2026-09-01 15:16:10 old_pid=12592 stopped_after_exact_port_owner_check
+2026-09-01 15:16:10 start-voice-bridge.bat exit=0 health=status_ok asr_ready tts_edge llm_hermes device_auth_ok
+
+[正式行为验收]
+2026-09-01 15:18:14 ASR="我的生日是什么时候" route=rag llm_backend=deepseek comfort_sent=false first_frame_ready_ms=1221 user_result=answered_birthday
+2026-09-01 15:18:29 ASR="重新说一遍" route=replay llm_backend=replay comfort_sent=false llm_ttft_ms=1 llm_total_ms=1 first_frame_ready_ms=1070 user_result=repeated_same_birthday
+2026-09-01 15:19:55 ASR="帮我搜索一下今天深圳的天气" route=hermes llm_backend=hermes tool_seen=true comfort_sent=true first_frame_ready_ms=94 user_result=answered_weather
+2026-09-01 15:20:59 ASR="刚才那个呢" route=context llm_backend=hermes tool_seen=false comfort_sent=true first_frame_ready_ms=122 user_result=continued_weather
+
+[普通路径有效样本；最终 N=10]
+2026-09-01 15:25:34 ASR="你好" route=lightweight device_release_to_codec_ms=1374.009
+2026-09-01 15:25:50 ASR="你好" route=lightweight device_release_to_codec_ms=1744.740
+2026-09-01 15:26:07 ASR="你好" route=lightweight device_release_to_codec_ms=1140.030
+2026-09-01 15:26:18 ASR="你好" route=lightweight device_release_to_codec_ms=1409.498
+2026-09-01 15:26:46 ASR="你好" route=lightweight device_release_to_codec_ms=1416.848
+2026-09-01 15:27:01 ASR="你好" route=lightweight device_release_to_codec_ms=1353.303
+2026-09-01 15:27:14 ASR="你好" route=lightweight device_release_to_codec_ms=2171.783
+2026-09-01 15:27:31 ASR="你好" route=lightweight device_release_to_codec_ms=1873.534
+2026-09-01 15:38:39 ASR="你好" route=lightweight device_release_to_codec_ms=1310.093
+2026-09-01 15:38:47 ASR="你好" route=lightweight device_release_to_codec_ms=1083.183
+
+[保留但不纳入最终 N=10]
+2026-09-01 15:26:01 ASR="" device_release_to_codec_ms=1436.332 exclusion=empty_asr
+2026-09-01 15:27:44 ASR="你" route=lightweight device_release_to_codec_ms=1379.098 exclusion=truncated_asr
+2026-09-01 15:38:57 ASR="你" route=lightweight device_release_to_codec_ms=1481.055 exclusion=truncated_asr
+2026-09-01 15:39:05 ASR="你好" route=lightweight device_release_to_codec_ms=1190.367 exclusion=surplus_after_first_two_valid_supplements
+
+[统计]
+N=10
+sorted_ms=1083.183,1140.030,1310.093,1353.303,1374.009,1409.498,1416.848,1744.740,1873.534,2171.783
+median_ms=1391.754
+p95_linear_ms=2037.571
+min_ms=1083.183
+max_ms=2171.783
+mean_ms=1487.702
+cv_percent=21.69
+gate_median_ms=1484.589
+margin_ms=92.835
+verdict=PASS

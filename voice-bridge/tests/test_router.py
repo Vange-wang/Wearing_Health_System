@@ -92,3 +92,35 @@ def test_broad_word_short_chat_stays_lightweight():
     r = _router()
     assert r.route("怎么样") == LIGHTWEIGHT
     assert r.route("是什么") == LIGHTWEIGHT
+
+
+def test_classify_followup_recognizes_exact_replay_phrases():
+    """仅完整复述短语进入 REPLAY，不复用 ISSUE-0010 的宽松追问判定。"""
+    r = _router()
+    replay_phrases = (
+        "重新说一遍", "再说一遍", "重复一遍", "重新说一次",
+        "再说一次", "重复一次", "再来一遍", "重新播一遍",
+    )
+    for text in replay_phrases:
+        assert r.classify_followup(text) == "replay"
+
+
+def test_classify_followup_recognizes_context_phrases():
+    """明确的上一轮指代进入 CONTEXT。"""
+    r = _router()
+    context_phrases = (
+        "刚才那个", "刚才说的", "那个呢", "那这个呢",
+        "刚才那个呢", "刚才说的是什么",
+    )
+    for text in context_phrases:
+        assert r.classify_followup(text) == "context"
+
+
+def test_classify_followup_rejects_broad_single_token_false_positives():
+    """普通命令、闲聊和单轮措辞不能被误判成跨轮联动。"""
+    r = _router()
+    for text in (
+        "查询一次天气", "说一遍注意事项", "再查一次天气",
+        "说一下天气", "讲个笑话", "谢谢",
+    ):
+        assert r.classify_followup(text) is None

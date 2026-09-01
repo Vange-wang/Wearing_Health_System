@@ -60,6 +60,18 @@ HEALTH_KNOWLEDGE_HINTS = (
     "怎么办", "怎么选", "太高", "太低", "偏高", "偏低",
 )
 
+# ISSUE-0013：跨路径联动只接受有界复合短语，避免「一次/一遍/刚才/那个」
+# 等单词把普通命令误判为跨轮复述或上下文追问。
+REPLAY_PHRASES = (
+    "重新说一遍", "再说一遍", "重复一遍", "重新说一次",
+    "再说一次", "重复一次", "再来一遍", "重新播一遍",
+)
+
+CONTEXT_PHRASES = (
+    "刚才那个", "刚才说的", "那个呢", "那这个呢",
+    "刚才那个呢", "刚才说的是什么",
+)
+
 
 class Router:
     def __init__(self, tool_keywords: list[str], skill_keywords: list[str],
@@ -81,6 +93,18 @@ class Router:
             if wrong in text:
                 text = text.replace(wrong, right)
         return text
+
+    def classify_followup(self, text: str) -> str | None:
+        """识别 ISSUE-0013 的精确跨路径联动意图。
+
+        返回 ``replay`` / ``context`` / ``None``。该分类与 ISSUE-0010
+        的宽松 ``_is_followup`` 路由继承相互独立。
+        """
+        if any(phrase in text for phrase in REPLAY_PHRASES):
+            return "replay"
+        if any(phrase in text for phrase in CONTEXT_PHRASES):
+            return "context"
+        return None
 
     def _set_last_route(self, route: str) -> None:
         self._last_route = route

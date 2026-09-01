@@ -1,0 +1,566 @@
+2026-09-01T15:30:21.4239921+08:00 [0;32mI (1342272) ble_central: ??? seq=205 HR=0 SpO2=0 conf=0 f[0;32mI (1493672) ble_central: ??? seq=235 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:21.4568065+08:00 [0;32mI (1493672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:21.4573826+08:00 [0m
+2026-09-01T15:30:21.4576096+08:00 [0;32mI (1493672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:21.4578740+08:00 [0m
+2026-09-01T15:30:26.1861523+08:00 [0;32mI (1498472) ble_central: ??? seq=236 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:26.1871904+08:00 [0;32mI (1498472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:26.1874633+08:00 [0m
+2026-09-01T15:30:26.2077612+08:00 [0;32mI (1498472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:26.2082171+08:00 [0m
+2026-09-01T15:30:31.2575131+08:00 [0;32mI (1503472) ble_central: ??? seq=237 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:31.2577397+08:00 [0;32mI (1503472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:31.2578934+08:00 [0m
+2026-09-01T15:30:31.2580291+08:00 [0;32mI (1503472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:31.2581456+08:00 [0m
+2026-09-01T15:30:36.2338078+08:00 [0;32mI (1508472) ble_central: ??? seq=238 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:36.2343549+08:00 [0;32mI (1508472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:36.2345661+08:00 [0m
+2026-09-01T15:30:36.2346808+08:00 [0;32mI (1508472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:36.2347993+08:00 [0m
+2026-09-01T15:30:41.4048024+08:00 [0;32mI (1513672) ble_central: ??? seq=239 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:41.4053799+08:00 [0;32mI (1513672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:41.4056734+08:00 [0m
+2026-09-01T15:30:41.4057793+08:00 [0;32mI (1513672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:41.4058763+08:00 [0m
+2026-09-01T15:30:46.4913655+08:00 [0;32mI (1518672) ble_central: ??? seq=240 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:46.4917253+08:00 [0;32mI (1518672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:46.4919476+08:00 [0m
+2026-09-01T15:30:46.4920904+08:00 [0;32mI (1518672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:46.4922359+08:00 [0m
+2026-09-01T15:30:51.4261252+08:00 [0;32mI (1523672) ble_central: ??? seq=241 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:51.4264059+08:00 [0;32mI (1523672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:51.4265341+08:00 [0m
+2026-09-01T15:30:51.4266238+08:00 [0;32mI (1523672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:51.4267288+08:00 [0m
+2026-09-01T15:30:56.4684376+08:00 [0;32mI (1528672) ble_central: ??? seq=242 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:30:56.4688121+08:00 [0;32mI (1528672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:56.4690067+08:00 [0m
+2026-09-01T15:30:56.4691095+08:00 [0;32mI (1528672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:30:56.4692052+08:00 [0m
+2026-09-01T15:31:01.4207265+08:00 [0;32mI (1533672) ble_central: ??? seq=243 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:01.4209599+08:00 [0;32mI (1533682) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:01.4210783+08:00 [0m
+2026-09-01T15:31:01.4213023+08:00 [0;32mI (1533682) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:01.4214429+08:00 [0m
+2026-09-01T15:31:06.5935996+08:00 [0;32mI (1538872) ble_central: ??? seq=244 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:06.5938567+08:00 [0;32mI (1538872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:06.5939965+08:00 [0m
+2026-09-01T15:31:06.5941075+08:00 [0;32mI (1538872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:06.5942574+08:00 [0m
+2026-09-01T15:31:11.6484836+08:00 [0;32mI (1543872) ble_central: ??? seq=245 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:11.6487267+08:00 [0;32mI (1543872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:11.6488467+08:00 [0m
+2026-09-01T15:31:11.6489370+08:00 [0;32mI (1543872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:11.6490385+08:00 [0m
+2026-09-01T15:31:17.0347592+08:00 [0;32mI (1549272) ble_central: ??? seq=246 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:17.0349950+08:00 [0;32mI (1549272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:17.0351549+08:00 [0m
+2026-09-01T15:31:17.0352590+08:00 [0;32mI (1549272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:17.0353774+08:00 [0m
+2026-09-01T15:31:21.6818613+08:00 [0;32mI (1553872) ble_central: ??? seq=247 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:21.6822651+08:00 [0;32mI (1553872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:21.6823988+08:00 [0m
+2026-09-01T15:31:21.6825023+08:00 [0;32mI (1553872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:21.6826631+08:00 [0m
+2026-09-01T15:31:26.5704301+08:00 [0;32mI (1558872) ble_central: ??? seq=248 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:26.5706445+08:00 [0;32mI (1558872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:26.5707598+08:00 [0m
+2026-09-01T15:31:26.5708562+08:00 [0;32mI (1558872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:26.5709624+08:00 [0m
+2026-09-01T15:31:31.8224614+08:00 [0;32mI (1564072) ble_central: ??? seq=249 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:31.8226184+08:00 [0;32mI (1564072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:31.8227035+08:00 [0m
+2026-09-01T15:31:31.8227714+08:00 [0;32mI (1564072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:31.8228478+08:00 [0m
+2026-09-01T15:31:36.7821096+08:00 [0;32mI (1569072) ble_central: ??? seq=250 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:36.7833309+08:00 [0;32mI (1569072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:36.7835308+08:00 [0m
+2026-09-01T15:31:36.7836408+08:00 [0;32mI (1569072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:36.7837465+08:00 [0m
+2026-09-01T15:31:42.6050240+08:00 [0;32mI (1574872) ble_central: ??? seq=251 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:42.6054559+08:00 [0;32mI (1574872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:42.6056619+08:00 [0m
+2026-09-01T15:31:42.6058831+08:00 [0;32mI (1574872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:42.6060134+08:00 [0m
+2026-09-01T15:31:46.8669384+08:00 [0;32mI (1579072) ble_central: ??? seq=252 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:46.8671317+08:00 [0;32mI (1579072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:46.8674312+08:00 [0m
+2026-09-01T15:31:46.8675529+08:00 [0;32mI (1579072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:46.8676481+08:00 [0m
+2026-09-01T15:31:51.8322247+08:00 [0;32mI (1584072) ble_central: ??? seq=253 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:51.8324427+08:00 [0;32mI (1584072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:51.8326213+08:00 [0m
+2026-09-01T15:31:51.8327658+08:00 [0;32mI (1584072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:51.8329180+08:00 [0m
+2026-09-01T15:31:56.9797810+08:00 [0;32mI (1589272) ble_central: ??? seq=254 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:31:56.9798709+08:00 [0;32mI (1589272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:56.9799058+08:00 [0m
+2026-09-01T15:31:56.9799362+08:00 [0;32mI (1589272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:31:56.9799684+08:00 [0m
+2026-09-01T15:32:02.0238998+08:00 [0;32mI (1594272) ble_central: ??? seq=255 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:02.0240412+08:00 [0;32mI (1594272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:02.0241551+08:00 [0m
+2026-09-01T15:32:02.0242324+08:00 [0;32mI (1594272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:02.0243231+08:00 [0m
+2026-09-01T15:32:07.0648596+08:00 [0;32mI (1599272) ble_central: ??? seq=0 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:07.0649485+08:00 [0;32mI (1599272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:07.0649860+08:00 [0m
+2026-09-01T15:32:07.0650175+08:00 [0;32mI (1599272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:07.0650512+08:00 [0m
+2026-09-01T15:32:12.1948001+08:00 [0;32mI (1604472) ble_central: ??? seq=1 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:12.1948963+08:00 [0;32mI (1604472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:12.1949334+08:00 [0m
+2026-09-01T15:32:12.1949632+08:00 [0;32mI (1604482) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:12.1949947+08:00 [0m
+2026-09-01T15:32:17.2485129+08:00 [0;32mI (1609472) ble_central: ??? seq=2 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:17.2487703+08:00 [0;32mI (1609472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:17.2488828+08:00 [0m
+2026-09-01T15:32:17.2489233+08:00 [0;32mI (1609482) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:17.2489715+08:00 [0m
+2026-09-01T15:32:22.1955775+08:00 [0;32mI (1614472) ble_central: ??? seq=3 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:22.1956747+08:00 [0;32mI (1614472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:22.1957783+08:00 [0m
+2026-09-01T15:32:22.1959188+08:00 [0;32mI (1614472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:22.1960368+08:00 [0m
+2026-09-01T15:32:27.2431368+08:00 [0;32mI (1619472) ble_central: ??? seq=4 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:27.2432757+08:00 [0;32mI (1619472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:27.2433599+08:00 [0m
+2026-09-01T15:32:27.2434297+08:00 [0;32mI (1619482) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:27.2435346+08:00 [0m
+2026-09-01T15:32:32.1731730+08:00 [0;32mI (1624472) ble_central: ??? seq=5 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:32.1733216+08:00 [0;32mI (1624472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:32.1734080+08:00 [0m
+2026-09-01T15:32:32.1735103+08:00 [0;32mI (1624472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:32.1735906+08:00 [0m
+2026-09-01T15:32:37.1964414+08:00 [0;32mI (1629472) ble_central: ??? seq=6 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:37.1965734+08:00 [0;32mI (1629472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:37.1966547+08:00 [0m
+2026-09-01T15:32:37.1967222+08:00 [0;32mI (1629472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:37.1967968+08:00 [0m
+2026-09-01T15:32:42.2440719+08:00 [0;32mI (1634472) ble_central: ??? seq=7 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:42.2442303+08:00 [0;32mI (1634472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:42.2443282+08:00 [0m
+2026-09-01T15:32:42.2444049+08:00 [0;32mI (1634472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:42.2444973+08:00 [0m
+2026-09-01T15:32:47.3797939+08:00 [0;32mI (1639672) ble_central: ??? seq=8 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:47.3799484+08:00 [0;32mI (1639672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:47.3800505+08:00 [0m
+2026-09-01T15:32:47.3801510+08:00 [0;32mI (1639672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:47.3802351+08:00 [0m
+2026-09-01T15:32:52.4245063+08:00 [0;32mI (1644672) ble_central: ??? seq=9 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:52.4246682+08:00 [0;32mI (1644672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:52.4247635+08:00 [0m
+2026-09-01T15:32:52.4248416+08:00 [0;32mI (1644672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:52.4249256+08:00 [0m
+2026-09-01T15:32:57.4528861+08:00 [0;32mI (1649672) ble_central: ??? seq=10 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:32:57.4529833+08:00 [0;32mI (1649672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:57.4530228+08:00 [0m
+2026-09-01T15:32:57.4530562+08:00 [0;32mI (1649672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:32:57.4530943+08:00 [0m
+2026-09-01T15:33:02.3741311+08:00 [0;32mI (1654672) ble_central: ??? seq=11 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:02.3742446+08:00 [0;32mI (1654672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:02.3742941+08:00 [0m
+2026-09-01T15:33:02.3743434+08:00 [0;32mI (1654672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:02.3743946+08:00 [0m
+2026-09-01T15:33:07.8379148+08:00 [0;32mI (1660072) ble_central: ??? seq=12 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:07.8380899+08:00 [0;32mI (1660072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:07.8382115+08:00 [0m
+2026-09-01T15:33:07.8382944+08:00 [0;32mI (1660072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:07.8383839+08:00 [0m
+2026-09-01T15:33:12.6459843+08:00 [0;32mI (1664872) ble_central: ??? seq=13 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:12.6461353+08:00 [0;32mI (1664872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:12.6462328+08:00 [0m
+2026-09-01T15:33:12.6463115+08:00 [0;32mI (1664872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:12.6464990+08:00 [0m
+2026-09-01T15:33:17.5760262+08:00 [0;32mI (1669872) ble_central: ??? seq=14 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:17.5761188+08:00 [0;32mI (1669872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:17.5761571+08:00 [0m
+2026-09-01T15:33:17.5761888+08:00 [0;32mI (1669872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:17.5762231+08:00 [0m
+2026-09-01T15:33:22.6286970+08:00 [0;32mI (1674872) ble_central: ??? seq=15 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:22.6288486+08:00 [0;32mI (1674872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:22.6289356+08:00 [0m
+2026-09-01T15:33:22.6290035+08:00 [0;32mI (1674872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:22.6291272+08:00 [0m
+2026-09-01T15:33:27.6665146+08:00 [0;32mI (1679872) ble_central: ??? seq=16 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:27.6666728+08:00 [0;32mI (1679872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:27.6667728+08:00 [0m
+2026-09-01T15:33:27.6668565+08:00 [0;32mI (1679872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:27.6669733+08:00 [0m
+2026-09-01T15:33:33.4724745+08:00 [0;32mI (1685672) ble_central: ??? seq=17 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:33.4726209+08:00 [0;32mI (1685672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:33.4727155+08:00 [0m
+2026-09-01T15:33:33.4727852+08:00 [0;32mI (1685672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:33.4728662+08:00 [0m
+2026-09-01T15:33:37.8672686+08:00 [0;32mI (1690072) ble_central: ??? seq=18 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:37.8675459+08:00 [0;32mI (1690072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:37.8678775+08:00 [0m
+2026-09-01T15:33:37.8680396+08:00 [0;32mI (1690072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:37.8682158+08:00 [0m
+2026-09-01T15:33:42.8155667+08:00 [0;32mI (1695072) ble_central: ??? seq=19 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:42.8157010+08:00 [0;32mI (1695072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:42.8157820+08:00 [0m
+2026-09-01T15:33:42.8158489+08:00 [0;32mI (1695082) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:42.8159610+08:00 [0m
+2026-09-01T15:33:47.8632872+08:00 [0;32mI (1700072) ble_central: ??? seq=20 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:47.8634398+08:00 [0;32mI (1700072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:47.8635375+08:00 [0m
+2026-09-01T15:33:47.8636376+08:00 [0;32mI (1700072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:47.8637226+08:00 [0m
+2026-09-01T15:33:52.7989244+08:00 [0;32mI (1705072) ble_central: ??? seq=21 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:52.7990743+08:00 [0;32mI (1705072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:52.7992016+08:00 [0m
+2026-09-01T15:33:52.7993010+08:00 [0;32mI (1705072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:52.7994075+08:00 [0m
+2026-09-01T15:33:57.8458327+08:00 [0;32mI (1710072) ble_central: ??? seq=22 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:33:57.8459737+08:00 [0;32mI (1710072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:57.8460877+08:00 [0m
+2026-09-01T15:33:57.8461686+08:00 [0;32mI (1710072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:33:57.8462789+08:00 [0m
+2026-09-01T15:34:03.1993026+08:00 [0;32mI (1715472) ble_central: ??? seq=23 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:03.1993907+08:00 [0;32mI (1715472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:03.1994270+08:00 [0m
+2026-09-01T15:34:03.1994586+08:00 [0;32mI (1715472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:03.1994934+08:00 [0m
+2026-09-01T15:34:08.2362134+08:00 [0;32mI (1720472) ble_central: ??? seq=24 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:08.2363754+08:00 [0;32mI (1720472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:08.2364646+08:00 [0m
+2026-09-01T15:34:08.2365373+08:00 [0;32mI (1720472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:08.2366148+08:00 [0m
+2026-09-01T15:34:13.0413488+08:00 [0;32mI (1725272) ble_central: ??? seq=25 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:13.0416259+08:00 [0;32mI (1725272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:13.0418162+08:00 [0m
+2026-09-01T15:34:13.0419724+08:00 [0;32mI (1725272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:13.0421491+08:00 [0m
+2026-09-01T15:34:18.0736547+08:00 [0;32mI (1730272) ble_central: ??? seq=26 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:18.0737942+08:00 [0;32mI (1730272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:18.0738752+08:00 [0m
+2026-09-01T15:34:18.0739418+08:00 [0;32mI (1730272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:18.0740161+08:00 [0m
+2026-09-01T15:34:22.9994271+08:00 [0;32mI (1735272) ble_central: ??? seq=27 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:22.9995712+08:00 [0;32mI (1735272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:22.9996523+08:00 [0m
+2026-09-01T15:34:22.9997187+08:00 [0;32mI (1735272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:22.9997928+08:00 [0m
+2026-09-01T15:34:28.2463378+08:00 [0;32mI (1740472) ble_central: ??? seq=28 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:28.2465965+08:00 [0;32mI (1740472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:28.2467669+08:00 [0m
+2026-09-01T15:34:28.2468652+08:00 [0;32mI (1740472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:28.2469490+08:00 [0m
+2026-09-01T15:34:33.1709249+08:00 [0;32mI (1745472) ble_central: ??? seq=29 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:33.1710763+08:00 [0;32mI (1745472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:33.1711807+08:00 [0m
+2026-09-01T15:34:33.1712602+08:00 [0;32mI (1745482) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:33.1713390+08:00 [0m
+2026-09-01T15:34:38.1946398+08:00 [0;32mI (1750472) ble_central: ??? seq=30 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:38.1947913+08:00 [0;32mI (1750472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:38.1949176+08:00 [0m
+2026-09-01T15:34:38.1950160+08:00 [0;32mI (1750472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:38.1951223+08:00 [0m
+2026-09-01T15:34:43.2476237+08:00 [0;32mI (1755472) ble_central: ??? seq=31 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:43.2478001+08:00 [0;32mI (1755472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:43.2478937+08:00 [0m
+2026-09-01T15:34:43.2479684+08:00 [0;32mI (1755472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:43.2480510+08:00 [0m
+2026-09-01T15:34:48.1705611+08:00 [0;32mI (1760472) ble_central: ??? seq=32 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:48.1707102+08:00 [0;32mI (1760472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:48.1708163+08:00 [0m
+2026-09-01T15:34:48.1709147+08:00 [0;32mI (1760472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:48.1710126+08:00 [0m
+2026-09-01T15:34:53.4164446+08:00 [0;32mI (1765672) ble_central: ??? seq=33 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:53.4165248+08:00 [0;32mI (1765672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:53.4165627+08:00 [0m
+2026-09-01T15:34:53.4165935+08:00 [0;32mI (1765672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:53.4166267+08:00 [0m
+2026-09-01T15:34:58.6717457+08:00 [0;32mI (1770872) ble_central: ??? seq=34 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:34:58.6718943+08:00 [0;32mI (1770872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:58.6719863+08:00 [0m
+2026-09-01T15:34:58.7806028+08:00 [0;32mI (1771072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:34:58.7807641+08:00 [0m
+2026-09-01T15:35:03.3674798+08:00 [0;32mI (1775672) ble_central: ??? seq=35 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:03.3675716+08:00 [0;32mI (1775672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:03.3676077+08:00 [0m
+2026-09-01T15:35:03.3676645+08:00 [0;32mI (1775672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:03.4763546+08:00 [0m
+2026-09-01T15:35:08.6445468+08:00 [0;32mI (1780872) ble_central: ??? seq=36 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:08.6449388+08:00 [0;32mI (1780872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:08.6451488+08:00 [0m
+2026-09-01T15:35:08.6454100+08:00 [0;32mI (1780872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:08.6457496+08:00 [0m
+2026-09-01T15:35:13.4588176+08:00 [0;32mI (1785672) ble_central: ??? seq=37 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:13.4590031+08:00 [0;32mI (1785672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:13.4591570+08:00 [0m
+2026-09-01T15:35:13.4592451+08:00 [0;32mI (1785682) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:13.4593457+08:00 [0m
+2026-09-01T15:35:18.6034390+08:00 [0;32mI (1790872) ble_central: ??? seq=38 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:18.6035729+08:00 [0;32mI (1790872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:18.6036533+08:00 [0m
+2026-09-01T15:35:18.6037336+08:00 [0;32mI (1790872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:18.6038098+08:00 [0m
+2026-09-01T15:35:23.6377187+08:00 [0;32mI (1795872) ble_central: ??? seq=39 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:23.6378067+08:00 [0;32mI (1795872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:23.6378447+08:00 [0m
+2026-09-01T15:35:23.6378761+08:00 [0;32mI (1795882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:23.6379104+08:00 [0m
+2026-09-01T15:35:28.5732092+08:00 [0;32mI (1800872) ble_central: ??? seq=40 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:28.5733368+08:00 [0;32mI (1800872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:28.5733932+08:00 [0m
+2026-09-01T15:35:28.5734653+08:00 [0;32mI (1800872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:28.5735127+08:00 [0m
+2026-09-01T15:35:33.6035832+08:00 [0;32mI (1805872) ble_central: ??? seq=41 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:33.6037300+08:00 [0;32mI (1805872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:33.6038134+08:00 [0m
+2026-09-01T15:35:33.6038808+08:00 [0;32mI (1805872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:33.6039559+08:00 [0m
+2026-09-01T15:35:38.6625993+08:00 [0;32mI (1810872) ble_central: ??? seq=42 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:38.6626806+08:00 [0;32mI (1810872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:38.6627160+08:00 [0m
+2026-09-01T15:35:38.6627480+08:00 [0;32mI (1810872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:38.6627826+08:00 [0m
+2026-09-01T15:35:43.8351101+08:00 [0;32mI (1816072) ble_central: ??? seq=43 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:43.8352520+08:00 [0;32mI (1816072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:43.8353354+08:00 [0m
+2026-09-01T15:35:43.8354080+08:00 [0;32mI (1816072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:43.8354857+08:00 [0m
+2026-09-01T15:35:48.8684588+08:00 [0;32mI (1821072) ble_central: ??? seq=44 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:48.8686198+08:00 [0;32mI (1821072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:48.8687160+08:00 [0m
+2026-09-01T15:35:48.8688013+08:00 [0;32mI (1821072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:48.8688806+08:00 [0m
+2026-09-01T15:35:54.2661694+08:00 [0;32mI (1826472) ble_central: ??? seq=45 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:54.2663169+08:00 [0;32mI (1826472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:54.2663978+08:00 [0m
+2026-09-01T15:35:54.2664649+08:00 [0;32mI (1826472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:54.2665548+08:00 [0m
+2026-09-01T15:35:58.8506900+08:00 [0;32mI (1831072) ble_central: ??? seq=46 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:35:58.8509141+08:00 [0;32mI (1831072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:58.8510504+08:00 [0m
+2026-09-01T15:35:58.8511451+08:00 [0;32mI (1831072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:35:58.8512454+08:00 [0m
+2026-09-01T15:36:03.7829723+08:00 [0;32mI (1836072) ble_central: ??? seq=47 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:03.7831361+08:00 [0;32mI (1836072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:03.7831867+08:00 [0m
+2026-09-01T15:36:03.7832238+08:00 [0;32mI (1836072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:03.7832591+08:00 [0m
+2026-09-01T15:36:09.0237438+08:00 [0;32mI (1841272) ble_central: ??? seq=48 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:09.0238460+08:00 [0;32mI (1841272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:09.0238894+08:00 [0m
+2026-09-01T15:36:09.0239248+08:00 [0;32mI (1841272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:09.0240279+08:00 [0m
+2026-09-01T15:36:14.0592614+08:00 [0;32mI (1846272) ble_central: ??? seq=49 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:14.0594061+08:00 [0;32mI (1846272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:14.0595057+08:00 [0m
+2026-09-01T15:36:14.0595781+08:00 [0;32mI (1846282) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:14.0596581+08:00 [0m
+2026-09-01T15:36:18.9840142+08:00 [0;32mI (1851272) ble_central: ??? seq=50 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:18.9841541+08:00 [0;32mI (1851282) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:18.9842476+08:00 [0m
+2026-09-01T15:36:18.9843196+08:00 [0;32mI (1851282) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:18.9843964+08:00 [0m
+2026-09-01T15:36:24.0073192+08:00 [0;32mI (1856272) ble_central: ??? seq=51 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:24.0074056+08:00 [0;32mI (1856272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:24.0074512+08:00 [0m
+2026-09-01T15:36:24.0074871+08:00 [0;32mI (1856272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:24.0075254+08:00 [0m
+2026-09-01T15:36:29.0735640+08:00 [0;32mI (1861272) ble_central: ??? seq=52 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:29.0737441+08:00 [0;32mI (1861272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:29.0738701+08:00 [0m
+2026-09-01T15:36:29.0739704+08:00 [0;32mI (1861272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:29.0740764+08:00 [0m
+2026-09-01T15:36:34.4321196+08:00 [0;32mI (1866672) ble_central: ??? seq=53 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:34.4322814+08:00 [0;32mI (1866672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:34.4323960+08:00 [0m
+2026-09-01T15:36:34.4326453+08:00 [0;32mI (1866672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:34.4329019+08:00 [0m
+2026-09-01T15:36:39.2404403+08:00 [0;32mI (1871472) ble_central: ??? seq=54 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:39.2405819+08:00 [0;32mI (1871472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:39.2406791+08:00 [0m
+2026-09-01T15:36:39.2407527+08:00 [0;32mI (1871472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:39.2409013+08:00 [0m
+2026-09-01T15:36:44.2731379+08:00 [0;32mI (1876472) ble_central: ??? seq=55 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:44.2733073+08:00 [0;32mI (1876472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:44.2734104+08:00 [0m
+2026-09-01T15:36:44.2735104+08:00 [0;32mI (1876472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:44.2736072+08:00 [0m
+2026-09-01T15:36:49.6510598+08:00 [0;32mI (1881872) ble_central: ??? seq=56 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:49.6512395+08:00 [0;32mI (1881872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:49.6513425+08:00 [0m
+2026-09-01T15:36:49.6514228+08:00 [0;32mI (1881872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:49.6515013+08:00 [0m
+2026-09-01T15:36:54.2533570+08:00 [0;32mI (1886472) ble_central: ??? seq=57 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:54.2535362+08:00 [0;32mI (1886472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:54.2536518+08:00 [0m
+2026-09-01T15:36:54.2537628+08:00 [0;32mI (1886472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:54.2538712+08:00 [0m
+2026-09-01T15:36:59.3954951+08:00 [0;32mI (1891672) ble_central: ??? seq=58 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:36:59.3956426+08:00 [0;32mI (1891672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:59.3957462+08:00 [0m
+2026-09-01T15:36:59.3958297+08:00 [0;32mI (1891672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:36:59.3959207+08:00 [0m
+2026-09-01T15:37:04.4286968+08:00 [0;32mI (1896672) ble_central: ??? seq=59 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:04.4288570+08:00 [0;32mI (1896672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:04.4289551+08:00 [0m
+2026-09-01T15:37:04.4290343+08:00 [0;32mI (1896682) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:04.4291227+08:00 [0m
+2026-09-01T15:37:09.3779622+08:00 [0;32mI (1901672) ble_central: ??? seq=60 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:09.3780835+08:00 [0;32mI (1901672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:09.3781475+08:00 [0m
+2026-09-01T15:37:09.3781970+08:00 [0;32mI (1901672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:09.3782490+08:00 [0m
+2026-09-01T15:37:14.4112927+08:00 [0;32mI (1906672) ble_central: ??? seq=61 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:14.4114788+08:00 [0;32mI (1906672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:14.4116022+08:00 [0m
+2026-09-01T15:37:14.4117037+08:00 [0;32mI (1906672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:14.4118194+08:00 [0m
+2026-09-01T15:37:19.4629510+08:00 [0;32mI (1911672) ble_central: ??? seq=62 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:19.4631602+08:00 [0;32mI (1911672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:19.4633128+08:00 [0m
+2026-09-01T15:37:19.5707716+08:00 [0;32mI (1911872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:19.5708984+08:00 [0m
+2026-09-01T15:37:24.6023798+08:00 [0;32mI (1916872) ble_central: ??? seq=63 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:24.6025575+08:00 [0;32mI (1916872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:24.6026662+08:00 [0m
+2026-09-01T15:37:24.6027479+08:00 [0;32mI (1916872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:24.6028266+08:00 [0m
+2026-09-01T15:37:29.5743919+08:00 [0;32mI (1921872) ble_central: ??? seq=64 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:29.5745914+08:00 [0;32mI (1921872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:29.5747552+08:00 [0m
+2026-09-01T15:37:29.5748807+08:00 [0;32mI (1921882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:29.5750158+08:00 [0m
+2026-09-01T15:37:34.6038981+08:00 [0;32mI (1926872) ble_central: ??? seq=65 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:34.6040757+08:00 [0;32mI (1926872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:34.6042182+08:00 [0m
+2026-09-01T15:37:34.6043248+08:00 [0;32mI (1926882) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:34.6044314+08:00 [0m
+2026-09-01T15:37:39.6341822+08:00 [0;32mI (1931872) ble_central: ??? seq=66 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:39.6343540+08:00 [0;32mI (1931872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:39.6344822+08:00 [0m
+2026-09-01T15:37:39.6345998+08:00 [0;32mI (1931872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:39.6347095+08:00 [0m
+2026-09-01T15:37:44.5779822+08:00 [0;32mI (1936872) ble_central: ??? seq=67 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:44.5781386+08:00 [0;32mI (1936872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:44.5782368+08:00 [0m
+2026-09-01T15:37:44.5783170+08:00 [0;32mI (1936872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:44.5784038+08:00 [0m
+2026-09-01T15:37:49.8267882+08:00 [0;32mI (1942072) ble_central: ??? seq=68 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:49.8269998+08:00 [0;32mI (1942072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:49.8271718+08:00 [0m
+2026-09-01T15:37:49.8272985+08:00 [0;32mI (1942072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:49.8274555+08:00 [0m
+2026-09-01T15:37:54.9768923+08:00 [0;32mI (1947272) ble_central: ??? seq=69 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:54.9772036+08:00 [0;32mI (1947272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:54.9773748+08:00 [0m
+2026-09-01T15:37:54.9774869+08:00 [0;32mI (1947272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:54.9776065+08:00 [0m
+2026-09-01T15:37:59.7959768+08:00 [0;32mI (1952072) ble_central: ??? seq=70 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:37:59.7961510+08:00 [0;32mI (1952082) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:59.7962698+08:00 [0m
+2026-09-01T15:37:59.7963657+08:00 [0;32mI (1952082) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:37:59.7964661+08:00 [0m
+2026-09-01T15:38:04.8463284+08:00 [0;32mI (1957072) ble_central: ??? seq=71 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:04.8464718+08:00 [0;32mI (1957072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:04.8465684+08:00 [0m
+2026-09-01T15:38:04.8466455+08:00 [0;32mI (1957072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:04.8467308+08:00 [0m
+2026-09-01T15:38:09.7720828+08:00 [0;32mI (1962072) ble_central: ??? seq=72 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:09.7722344+08:00 [0;32mI (1962072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:09.7723311+08:00 [0m
+2026-09-01T15:38:09.7724114+08:00 [0;32mI (1962072) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:09.7724975+08:00 [0m
+2026-09-01T15:38:15.0478334+08:00 [0;32mI (1967272) ble_central: ??? seq=73 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:15.0479645+08:00 [0;32mI (1967272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:15.0480441+08:00 [0m
+2026-09-01T15:38:15.0481358+08:00 [0;32mI (1967272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:15.0482219+08:00 [0m
+2026-09-01T15:38:19.9679136+08:00 [0;32mI (1972272) ble_central: ??? seq=74 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:19.9680060+08:00 [0;32mI (1972272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:19.9680428+08:00 [0m
+2026-09-01T15:38:19.9680725+08:00 [0;32mI (1972272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:19.9681105+08:00 [0m
+2026-09-01T15:38:24.9978596+08:00 [0;32mI (1977272) ble_central: ??? seq=75 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:24.9980912+08:00 [0;32mI (1977272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:24.9984106+08:00 [0m
+2026-09-01T15:38:24.9985769+08:00 [0;32mI (1977272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:24.9987316+08:00 [0m
+2026-09-01T15:38:30.0232666+08:00 [0;32mI (1982272) ble_central: ??? seq=76 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:30.0234321+08:00 [0;32mI (1982272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:30.0235520+08:00 [0m
+2026-09-01T15:38:30.0236419+08:00 [0;32mI (1982272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:30.0237429+08:00 [0m
+2026-09-01T15:38:35.0724428+08:00 [0;32mI (1987272) ble_central: ??? seq=77 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:35.0725449+08:00 [0;32mI (1987272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:35.0725969+08:00 [0m
+2026-09-01T15:38:35.0726420+08:00 [0;32mI (1987272) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:35.0727124+08:00 [0m
+2026-09-01T15:38:37.8095636+08:00 [0;32mI (1990062) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:38:38.1372993+08:00 [0;32mI (1990372) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:38:38.1373934+08:00 [0;32mI (1990372) voice_agent: >> TALK START[0m
+2026-09-01T15:38:39.2258084+08:00 [0;32mI (1990452) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:38:39.2259125+08:00 [0;32mI (1991482) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:38:39.3342818+08:00 [0;32mI (1991552) voice_agent: REC+UPLOAD END, pcm bytes=47104[0m
+2026-09-01T15:38:40.5494650+08:00 [0;32mI (1992792) voice_agent: HTTP status=200[0m
+2026-09-01T15:38:40.5637822+08:00 [0;32mI (1992792) voice_agent: LATENCY release_to_codec_us=1310093[0m
+2026-09-01T15:38:40.6872971+08:00 [0;32mI (1992872) ble_central: ??? seq=78 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:40.6874959+08:00 [0;32mI (1992872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:40.6875887+08:00 [0m
+2026-09-01T15:38:40.6876459+08:00 [0;32mI (1992872) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:40.6877082+08:00 [0m
+2026-09-01T15:38:43.8576573+08:00 [0;32mI (1996072) voice_agent: PLAY DONE, frames=12[0m
+2026-09-01T15:38:43.8596274+08:00 [0;32mI (1996072) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:38:43.8596960+08:00 [0;32mI (1996072) voice_agent: << TALK DONE[0m
+2026-09-01T15:38:45.1688076+08:00 [0;32mI (1997472) ble_central: ??? seq=79 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:45.1689128+08:00 [0;32mI (1997472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:45.1689642+08:00 [0m
+2026-09-01T15:38:45.1690053+08:00 [0;32mI (1997472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:45.1690521+08:00 [0m
+2026-09-01T15:38:45.4921013+08:00 [0;32mI (1997722) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:38:45.8173724+08:00 [0;32mI (1998032) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:38:45.8174686+08:00 [0;32mI (1998032) voice_agent: >> TALK START[0m
+2026-09-01T15:38:47.2405629+08:00 [0;32mI (1998112) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:38:47.2407427+08:00 [0;32mI (1999492) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:38:47.2408967+08:00 [0;32mI (1999492) voice_agent: REC+UPLOAD END, pcm bytes=57344[0m
+2026-09-01T15:38:48.3441839+08:00 [0;32mI (2000572) voice_agent: HTTP status=200[0m
+2026-09-01T15:38:48.3449066+08:00 [0;32mI (2000572) voice_agent: LATENCY release_to_codec_us=1083183[0m
+2026-09-01T15:38:50.4242182+08:00 [0;32mI (2002672) ble_central: ??? seq=80 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:50.4244036+08:00 [0;32mI (2002672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:50.4245283+08:00 [0m
+2026-09-01T15:38:50.4246240+08:00 [0;32mI (2002672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:50.4247325+08:00 [0m
+2026-09-01T15:38:54.1342823+08:00 [0;32mI (2006352) voice_agent: PLAY DONE, frames=18[0m
+2026-09-01T15:38:54.1352343+08:00 [0;32mI (2006352) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:38:54.1353754+08:00 [0;32mI (2006352) voice_agent: << TALK DONE[0m
+2026-09-01T15:38:55.2378901+08:00 [0;32mI (2007472) ble_central: ??? seq=81 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:38:55.2379815+08:00 [0;32mI (2007472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:55.2380306+08:00 [0m
+2026-09-01T15:38:55.2380681+08:00 [0;32mI (2007472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:38:55.2381077+08:00 [0m
+2026-09-01T15:38:55.2381429+08:00 [0;32mI (2007522) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:38:55.5619887+08:00 [0;32mI (2007832) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:38:55.5620857+08:00 [0;32mI (2007832) voice_agent: >> TALK START[0m
+2026-09-01T15:38:56.9736932+08:00 [0;32mI (2007842) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:38:56.9738996+08:00 [0;32mI (2009242) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:38:56.9741105+08:00 [0;32mI (2009242) voice_agent: REC+UPLOAD END, pcm bytes=55296[0m
+2026-09-01T15:38:58.4082530+08:00 [0;32mI (2010722) voice_agent: HTTP status=200[0m
+2026-09-01T15:38:58.5167612+08:00 [0;32mI (2010722) voice_agent: LATENCY release_to_codec_us=1481055[0m
+2026-09-01T15:39:00.2574998+08:00 [0;32mI (2012472) ble_central: ??? seq=82 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:39:00.2575931+08:00 [0;32mI (2012472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:39:00.2576337+08:00 [0m
+2026-09-01T15:39:00.2576667+08:00 [0;32mI (2012472) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:39:00.2577031+08:00 [0m
+2026-09-01T15:39:02.0245716+08:00 [0;32mI (2014332) voice_agent: PLAY DONE, frames=12[0m
+2026-09-01T15:39:02.0250102+08:00 [0;32mI (2014332) voice_agent: talk stack high-water remaining=1524 bytes[0m
+2026-09-01T15:39:02.0250700+08:00 [0;32mI (2014332) voice_agent: << TALK DONE[0m
+2026-09-01T15:39:03.2338822+08:00 [0;32mI (2015512) voice_agent: btn PRESS_DOWN -> capture immediately[0m
+2026-09-01T15:39:03.5584296+08:00 [0;32mI (2015822) voice_agent: long press confirmed; prebuffer ready[0m
+2026-09-01T15:39:03.5586026+08:00 [0;32mI (2015822) voice_agent: >> TALK START[0m
+2026-09-01T15:39:04.9848171+08:00 [0;32mI (2015842) voice_agent: REC+UPLOAD START (chunked)[0m
+2026-09-01T15:39:04.9850047+08:00 [0;32mI (2017202) voice_agent: btn PRESS_UP -> finish capture[0m
+2026-09-01T15:39:04.9851589+08:00 [0;32mI (2017272) voice_agent: REC+UPLOAD END, pcm bytes=55296[0m
+2026-09-01T15:39:05.4168959+08:00 [0;32mI (2017672) ble_central: ??? seq=83 HR=0 SpO2=0 conf=0 flags=0x00 bat=100 lost=0[0m
+2026-09-01T15:39:05.4170159+08:00 [0;32mI (2017672) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:39:05.4170751+08:00 [0m
+2026-09-01T15:39:05.4171299+08:00 [0;32mI (2017682) NimBLE: L2CAP remove_rx: rx_buf already NULL; conn_handle=0x0000 scid=0x0004
+2026-09-01T15:39:05.4171878+08:00 [0m
+2026-09-01T15:39:06.1825037+08:00 [0;32mI (2018392) voice_agent: HTTP status=200[0m
+2026-09-01T15:39:06.1833801+08:00 [0;32mI (2018392) voice_agent: LATENCY release_to_codec_us=1190367[0m
