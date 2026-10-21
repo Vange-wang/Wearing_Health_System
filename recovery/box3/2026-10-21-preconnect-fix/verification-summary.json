@@ -1,0 +1,14 @@
+{
+  "baseline_RED": "Actual VoiceV2Service.answer + real StreamingPipeline did not start preconnection while the model request was gated; test failed with TimeoutError.",
+  "candidate_GREEN": [
+    "ordinary answer opens before model returns, uses connection and produces WAV",
+    "weather enabled ordinary answer also overlaps and produces WAV",
+    "actual TurnStore continuation cancels candidate, retains ASR, closes preconnection",
+    "real weather routing/search/formatting uses synthetic provider result, performs no idle preconnect, produces normal WAV"
+  ],
+  "passed": 4,
+  "test_seconds": 1.72,
+  "supplier_edges": "Gated synthetic model transport, TTS connection, weather provider; no real API calls. Actual service/pipeline/resource/turn logic.",
+  "live_first_frame_or_human_acceptance": "NOT_TESTED",
+  "audioop_deprecation_warning": "existing Python 3.11 warning"
+}

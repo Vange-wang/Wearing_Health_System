@@ -13,6 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from contextlib import aclosing
 
 import numpy as np
 
@@ -21,6 +22,7 @@ from .vad import VADGate
 from .llm import LLMError, TOOL_SENTINEL
 from .tts import TTSError
 from .router import HERMES, LIGHTWEIGHT, RAG, DATA
+from .stream_resources import RequestResources
 
 logger = logging.getLogger("voice-bridge.pipeline")
 
@@ -43,10 +45,15 @@ def _timing_defaults() -> dict:
         "llm_backend": "unknown",
         "tool_seen": False,
         "tool_ms": 0,
+        "tool_elapsed_ms": 0,
         "comfort_sent": False,
         "route": HERMES,
         "first_frame_ready_ms": None,
         "service_write_ms": None,
+        "comfort_first_ms": None,
+        "answer_first_ms": None,
+        "failure_first_ms": None,
+        "audio_origin": "text_ready",
     }
 
 
@@ -55,6 +62,8 @@ class TimingRecord:
     """Mutable timing state owned by exactly one request."""
 
     _values: dict = field(default_factory=_timing_defaults)
+    resources: RequestResources = field(default_factory=RequestResources, repr=False)
+    audio_start_perf: float | None = field(default=None, repr=False)
 
     def __getitem__(self, key):
         return self._values[key]
@@ -119,6 +128,7 @@ class StreamingPipeline:
         health=None,
         data_stale_seconds: float = 300,
         tts_workers: int = 8,
+        queue_capacity: int = 0,
     ):
         self.asr = asr
         self.llm = llm          # 慢路径 Hermes
@@ -140,6 +150,9 @@ class StreamingPipeline:
         if callable(bind_health):
             bind_health(self._build_lightweight_health_context)
         self.tts_workers = int(tts_workers)
+        self.queue_capacity = int(queue_capacity)
+        if not 0 <= self.queue_capacity <= 16:
+            raise ValueError('queue_capacity must be 0..16')
         if not 1 <= self.tts_workers <= 16:
             raise ValueError("tts_workers must be between 1 and 16")
         # 慢路径安抚语池（预合成 WAV，query 池随机轮换）。快路径 ack 已删除（首字达标后不需要）。
@@ -190,7 +203,7 @@ class StreamingPipeline:
         """构造仅含上一轮且长度受限的 CONTEXT 提示，不负责记录日志。"""
         return (
             f"【上一轮】用户：{snapshot['last_user_text']}\n"
-            f"小V：{snapshot['last_reply_text'][:CONTEXT_REPLY_MAX_CHARS]}\n\n"
+            f"喵喵同学：{snapshot['last_reply_text'][:CONTEXT_REPLY_MAX_CHARS]}\n\n"
             f"【本轮】用户：{current_text}"
         )
 
@@ -203,7 +216,7 @@ class StreamingPipeline:
             return CONTEXT_NO_SNAPSHOT_TEXT
         return self._build_health_reply("")
 
-    def _pick_ack(self, text: str) -> bytes | None:
+    def _pick_ack(self, text: str) -> bytes | tuple[str, bytes] | None:
         """慢路径安抚语：从 query 池随机轮换（避免连续重复）。
 
         快路径 ack 已删除（首字延迟达标后无需应声）；慢路径（Hermes 联网搜索）
@@ -294,24 +307,44 @@ class StreamingPipeline:
 
         # 2. ASR（批式）
         t = time.perf_counter()
-        text = await asyncio.to_thread(self.asr.transcribe, wav_path)
+        if callable(getattr(self.asr, "transcribe_async", None)):
+            text = await self.asr.transcribe_async(wav_path)
+        else:
+            text = await asyncio.to_thread(self.asr.transcribe, wav_path)
         timing["asr_ms"] = round((time.perf_counter() - t) * 1000)
         if not text:
             raise NoSpeechError("ASR 未识别出有效语音")
 
-        async for frame in self._stream_from_text(text, timing):
-            yield frame
+        async with aclosing(self._stream_from_text(text, timing)) as stream:
+            async for frame in stream:
+                yield frame
 
     async def run_text(self, text: str, timing: TimingRecord | None = None):
         """流式路径（v0.4 A2）：text 已由流式 ASR 给出，直接走下游（路由/LLM/TTS/帧）。"""
         timing = self._prepare_timing(timing)
-        if not text:
+        from .input_qualification import meaningful_text
+        if not meaningful_text(text):
             raise NoSpeechError("流式 ASR 未识别出有效语音")
-        async for frame in self._stream_from_text(text, timing):
-            yield frame
+        async with aclosing(self._stream_from_text(text, timing)) as stream:
+            async for frame in stream:
+                yield frame
 
     async def _stream_from_text(self, text: str, timing: TimingRecord):
+        try:
+            async with aclosing(self._stream_from_text_owned(text, timing)) as stream:
+                async for frame in stream:
+                    yield frame
+        finally:
+            await timing.resources.aclose()
+
+    async def _stream_from_text_owned(self, text: str, timing: TimingRecord):
         """text → 路由（轻量/RAG/Hermes）→ LLM 流 → 分句 → TTS → 长度前缀帧。"""
+        resources = timing.resources
+        if timing.audio_start_perf is None:
+            timing.audio_start_perf = time.perf_counter()
+        captions_enabled = getattr(timing, "captions_enabled", False)
+        caption_texts = {} if captions_enabled else None
+        caption_stream = None
         # ASR 近音词归一（血氧 → 血阳/学养/学样 同音误识别），路由前应用
         if self.router is not None:
             text = self.router.normalize_asr(text)
@@ -374,6 +407,11 @@ class StreamingPipeline:
                     score_threshold=self.rag_score_threshold,
                 )
             route = self.router.route(text, bool(rag_results)) if self.router else HERMES
+            # A4-rev2: temperature wording can otherwise land in lightweight.
+            # Only the enabled bounded weather matcher may promote this route.
+            weather_match = getattr(self.llm, "handles_current_weather", None)
+            if route == LIGHTWEIGHT and weather_match is not None and weather_match(text):
+                route = HERMES
             response_route = route
 
         timing["route"] = route
@@ -405,7 +443,7 @@ class StreamingPipeline:
         preconn_state = None
         if response_route != HERMES and self.tts is not None and hasattr(self.tts, "open_preconnect"):
             preconn_state = {
-                "task": asyncio.create_task(self.tts.open_preconnect()),
+                "task": resources.task(self.tts.open_preconnect(), resource_result=True),
                 "used": False,
                 "disabled": False,
                 "lock": asyncio.Lock(),
@@ -426,7 +464,7 @@ class StreamingPipeline:
             delta_iter = iter([final_text])
         else:
             try:
-                delta_iter = await asyncio.to_thread(selected_llm.stream_chat, final_text)
+                delta_iter = await resources.call(selected_llm.stream_chat, final_text, returns_stream=True)
             except LLMError as e:
                 if selected_llm is not self.llm:
                     logger.warning("轻量通道失败(%s)，降级慢路径 Hermes", e)
@@ -435,8 +473,8 @@ class StreamingPipeline:
                     timing["llm_backend"] = getattr(self.llm, "name", "unknown")
                     selected_llm = self.llm  # 需求3：更新实际后端，避免误判提取
                     fallback_text = final_text if context_followup else text
-                    delta_iter = await asyncio.to_thread(
-                        self.llm.stream_chat, fallback_text
+                    delta_iter = await resources.call(
+                        self.llm.stream_chat, fallback_text, returns_stream=True
                     )
                     # 方向1：降级慢路径 → 禁用预连接（慢路径不预连，收尾统一关闭）
                     if preconn_state is not None:
@@ -445,12 +483,69 @@ class StreamingPipeline:
                     raise
 
         # 预合成流水线（并发 worker + 序号重排）：
+        request_stats = getattr(delta_iter, "stats", None)
+        if request_stats is None:
+            request_stats = dict(getattr(selected_llm, "stats", {}) or {})
+
+        def publish_stats():
+            seen = bool(request_stats.get("tool_seen"))
+            first_content = request_stats.get("first_content_ms")
+            elapsed = first_content if seen and first_content is not None else 0
+            if "weather_search_ms" in request_stats:
+                timing["weather_search_ms"] = request_stats["weather_search_ms"]
+            for key in ("weather_status", "weather_error"):
+                if key in request_stats:
+                    timing[key] = request_stats[key]
+            for source, destination in (("first_chunk_ms", "llm_first_sse_ms"), ("first_content_ms", "llm_first_content_ms")):
+                value = request_stats.get(source)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    timing[destination] = value
+            timing["tool_seen"] = seen
+            timing["tool_elapsed_ms"] = elapsed
+            timing["tool_ms"] = (timing["asr_ms"] or 0) + elapsed if seen and elapsed else 0
+
         # produce(LLM 分句) → tts_queue → N worker 并发 TTS → frame_queue → 按序发帧
         # 并发合成：edge 每句独立连接可并发（8 句 2.2s 实测稳定）；序号重排保证句子顺序
         worker_count = self.tts_workers
-        tts_queue: asyncio.Queue = asyncio.Queue()
-        frame_queue: asyncio.Queue = asyncio.Queue()
+        class OutputQueue(asyncio.Queue):
+            async def put(self, item):
+                # Cancelled producers must not block in finally while putting
+                # sentinels into a full queue whose consumer has disconnected.
+                if asyncio.current_task().cancelling():
+                    return
+                await super().put(item)
+        tts_queue: asyncio.Queue = OutputQueue(self.queue_capacity) if self.queue_capacity else asyncio.Queue()
+        reorder_condition = asyncio.Condition()
+        future_keys = set()
+        class FrameQueue(OutputQueue):
+            async def put(queue, item):
+                task = asyncio.current_task()
+                if task is not None and task.cancelling():
+                    return
+                key = item[0]
+                reserved = False
+                if key is not None:
+                    async with reorder_condition:
+                        await reorder_condition.wait_for(lambda:
+                            key[0] <= next_sentence_seq or len(future_keys) < self.queue_capacity)
+                        if key[0] > next_sentence_seq:
+                            future_keys.add(key)
+                            reserved = True
+                try:
+                    await super().put(item)
+                except BaseException:
+                    if reserved:
+                        async with reorder_condition:
+                            future_keys.discard(key)
+                            reorder_condition.notify_all()
+                    raise
+        # Future frames remain charged even after moving into pending. The
+        # current sentence always has queue access, so later workers cannot
+        # occupy all capacity and deadlock the missing earlier sentence.
+        frame_queue: asyncio.Queue = FrameQueue(self.queue_capacity) if self.queue_capacity else asyncio.Queue()
         tts_first_recorded = False
+        timing["tts_segment_gap_max_ms"] = 0
+        timing["tts_segment_gap_count"] = 0
         comfort_queued = False
         tts_wall_t0 = None
         total_sentences = [0]
@@ -480,17 +575,26 @@ class StreamingPipeline:
             last_seg = None
             emitted_any = False
             completed = True
+            last_segment_ready = None
             try:
-                async for seg_wav in seg_iter:
-                    if not tts_first_recorded:
-                        timing["tts_first_ms"] = round((time.perf_counter() - t0) * 1000)
-                        tts_first_recorded = True
-                    emitted_any = True
-                    if last_seg is not None:
-                        await frame_queue.put(((seq, seg_i), kind, last_seg, False))
+                async with aclosing(seg_iter) as stream:
+                    async for seg_wav in stream:
+                        ready_at = time.perf_counter()
+                        if last_segment_ready is not None:
+                            gap_ms = round((ready_at - last_segment_ready) * 1000)
+                            timing["tts_segment_gap_max_ms"] = max(timing["tts_segment_gap_max_ms"], gap_ms)
+                            timing["tts_segment_gap_count"] += 1
+                        last_segment_ready = ready_at
+                        if not tts_first_recorded:
+                            timing["tts_first_ms"] = round((time.perf_counter() - t0) * 1000)
+                            tts_first_recorded = True
+                        emitted_any = True
+                        # Deliver each segment immediately; sentence completion
+                        # is a separate internal marker, never an empty wire frame.
+                        await frame_queue.put(((seq, seg_i), kind, seg_wav, False))
                         seg_i += 1
-                    last_seg = seg_wav
-            except TTSError as e:
+                        last_seg = seg_wav
+            except Exception as e:
                 completed = False
                 logger.error("TTS 流式合成失败: %s", e)
             return seg_i, last_seg, emitted_any, completed
@@ -504,7 +608,11 @@ class StreamingPipeline:
                         logger.info("worker: 收到结束哨兵，退出")
                         break
                     seq, kind, sentence = item
-                    logger.info("worker: 取到任务 seq=%s kind=%s 句子=%r", seq, kind, (sentence or '')[:20])
+                    if caption_texts is not None:
+                        caption_texts[seq] = sentence
+                    if not getattr(timing, 'private_input', False):
+                        logger.info("worker: 取到任务 seq=%s kind=%s 句子=%r", seq, kind, (sentence or '')[:20])
+                    seg_i = 0  # next unqueued segment, also used by failure markers
                     try:
                         t0 = time.perf_counter()
                         if tts_wall_t0 is None:
@@ -534,7 +642,7 @@ class StreamingPipeline:
                                 delivery_failed[0] = True
                             logger.info("worker: TTS 合成完成 seq=%s seg_i=%s", seq, seg_i)
                             if last_seg is not None:
-                                await frame_queue.put(((seq, seg_i), kind, last_seg, True))
+                                await frame_queue.put(((seq, seg_i), kind, None, True))
                             else:
                                 delivery_failed[0] = True
                                 await frame_queue.put(((seq, 0), kind, None, True))
@@ -552,7 +660,7 @@ class StreamingPipeline:
                         # loop can advance instead of waiting forever.
                         delivery_failed[0] = True
                         logger.exception("并发合成 TTS 异常（跳过该句）: %s", e)
-                        await frame_queue.put(((seq, 0), kind, None, True))
+                        await frame_queue.put(((seq, seg_i), kind, None, True))
             finally:
                 await frame_queue.put((None, "worker_done", None, None))
 
@@ -565,8 +673,13 @@ class StreamingPipeline:
             # ISSUE-0001 修复：慢路径（Hermes）路由判定后立即发安抚语，不等首 token。
             # 慢路径由 tool_keywords 触发 → _pick_ack 命中 query 池（「稍等，我帮你查一下」）。
             if response_route == HERMES:
-                ack_wav = self._pick_ack(text)
-                if ack_wav is not None:
+                ack = self._pick_ack(text)
+                if ack is not None:
+                    # Paired startup cache preserves the exact spoken caption.
+                    # Legacy bytes-only callers have no known caption text.
+                    ack_text, ack_wav = ack if isinstance(ack, tuple) else (None, ack)
+                    if caption_texts is not None and ack_text is not None:
+                        caption_texts[seq] = ack_text
                     await frame_queue.put(((seq, 0), "comfort", ack_wav, True))
                     seq += 1
                     comfort_queued = True
@@ -580,7 +693,8 @@ class StreamingPipeline:
             try:
                 while True:
                     logger.info("produce: 等下一个 delta（阻塞读 LLM 流）...")
-                    delta = await asyncio.to_thread(_next_delta)
+                    delta = await resources.call(_next_delta)
+                    publish_stats()
                     if delta is sentinel:
                         logger.info("produce: 收到 sentinel，流结束")
                         break
@@ -592,7 +706,8 @@ class StreamingPipeline:
                             seq += 1
                             comfort_queued = True
                         continue
-                    logger.info("produce: 收到 content 片段 %r", delta[:20])
+                    if not getattr(timing, 'private_input', False):
+                        logger.info("produce: 收到 content 片段 %r", delta[:20])
                     assistant_parts.append(delta)  # 需求3：累积回复全文，回复完成后提取记忆
                     if not ttft_done:
                         timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
@@ -612,14 +727,15 @@ class StreamingPipeline:
                     await tts_queue.put(None)
                 await frame_queue.put((None, "producer_done", None, None))
 
-        workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
-        producer_task = asyncio.create_task(_produce())
+        workers = [resources.task(_worker()) for _ in range(worker_count)]
+        producer_task = resources.task(_produce())
 
         # 主流程：序号重排 + 句间停顿（A6，仅句边界加停顿，句内多帧连续）
         next_sentence_seq = 0
         next_seg = 0
         pending: dict = {}
         total_frames = 0
+        last_audio_yield_at = None
         prev_is_end = True  # 首帧前不加停顿
         producer_done = False
         workers_done = 0
@@ -642,7 +758,12 @@ class StreamingPipeline:
             logger.info("main: 收到帧 key=%s kind=%s is_end=%s next_sentence_seq=%s", key, kind, is_end, next_sentence_seq)
             pending[key] = (kind, wav, is_end)
             while (next_sentence_seq, next_seg) in pending:
-                kind, wav, is_end = pending.pop((next_sentence_seq, next_seg))
+                key = (next_sentence_seq, next_seg)
+                kind, wav, is_end = pending.pop(key)
+                if self.queue_capacity:
+                    async with reorder_condition:
+                        future_keys.discard(key)
+                        reorder_condition.notify_all()
                 if wav is not None:
                     if kind == "comfort":
                         if next_seg == 0:
@@ -654,13 +775,43 @@ class StreamingPipeline:
                     chunk_count += 1
                     # 句间停顿：仅上一帧是句尾时（句内多帧不打断）
                     if total_frames > 0 and self.sentence_gap_ms > 0 and prev_is_end:
-                        await asyncio.sleep(self.sentence_gap_ms / 1000.0)
-                    yield encode_frame(wav, self.max_frame_bytes)
+                        # Supply/consumer waiting already contributes to the
+                        # minimum delivery gap. Never add a fresh fixed delay
+                        # after a slow provider has finally produced audio.
+                        remaining = self.sentence_gap_ms / 1000.0 - (time.perf_counter() - last_audio_yield_at)
+                        if remaining > 0:
+                            await asyncio.sleep(remaining)
+                    publish_stats()
+                    frame = encode_frame(wav, self.max_frame_bytes)
+                    first_key = "comfort_first_ms" if kind == "comfort" else "answer_first_ms"
+                    if kind != "comfort" and request_stats.get("weather_status") == "failed":
+                        first_key = "failure_first_ms"
+                    if timing[first_key] is None:
+                        timing[first_key] = round((time.perf_counter() - timing.audio_start_perf) * 1000)
+                    last_audio_yield_at = time.perf_counter()
+                    yield frame
+                    # First audio has already been yielded. Caption encoding
+                    # never runs before that first audio delivery boundary.
+                    if caption_texts is not None:
+                        if caption_stream is None:
+                            from .caption_protocol import CaptionStream
+                            caption_stream = CaptionStream()
+                        if next_seg == 0:
+                            caption_stream.add(caption_texts.pop(next_sentence_seq, None))
+                        caption_frame = caption_stream.next_frame()
+                        if caption_frame is not None:
+                            yield caption_frame
                     total_frames += 1
                     prev_is_end = is_end
                 if is_end:
+                    prev_is_end = True  # terminal marker carries the sentence boundary
+                    if caption_texts is not None:
+                        caption_texts.pop(next_sentence_seq, None)
                     next_sentence_seq += 1
                     next_seg = 0
+                    if self.queue_capacity:
+                        async with reorder_condition:
+                            reorder_condition.notify_all()
                 else:
                     next_seg += 1
             if (
@@ -678,7 +829,7 @@ class StreamingPipeline:
         # 需求3（改造）：回复完成后统一触发记忆提取（全自动，每轮必做，不依赖流正常结束）。
         # 覆盖 lightweight/rag 路由（DeepSeek 提取）；hermes 慢路径 Hermes 自带 persistent
         # memory（豁免），DATA 模板直答无用户新信息（豁免）。
-        if selected_llm is not None and selected_llm is self.lightweight_llm and hasattr(selected_llm, "extract_memory_async"):
+        if not delivery_failed[0] and total_frames > 0 and selected_llm is not None and selected_llm is self.lightweight_llm and hasattr(selected_llm, "extract_memory_async"):
             if reply_text:
                 selected_llm.extract_memory_async(text, reply_text)
         # 方向1：预连接未被消费则关闭（降级慢路径 / 预连接失败 / 无正文句场景，避免连接泄漏）
@@ -694,21 +845,22 @@ class StreamingPipeline:
             tts_total_ms = (time.perf_counter() - tts_wall_t0) * 1000
 
         timing["tts_total_ms"] = round(tts_total_ms)
+        if caption_stream is not None:
+            while (caption_frame := caption_stream.next_frame()) is not None:
+                yield caption_frame
         timing["sentence_count"] = sentence_count
         timing["chunk_count"] = chunk_count
         timing["comfort_sent"] = comfort_sent
         # 分段计量：工具期 ≈ 请求→首个正文 delta（工具期间无正文）
-        stats = getattr(selected_llm, "stats", {}) or {}
-        tool_seen = bool(stats.get("tool_seen"))
-        first_content_ms = stats.get("first_content_ms")
-        timing["tool_seen"] = tool_seen
-        if tool_seen and first_content_ms is not None:
-            timing["tool_ms"] = (timing["asr_ms"] or 0) + first_content_ms
-        else:
-            timing["tool_ms"] = 0
+        publish_stats()
         # 只有普通轮次在所有响应帧成功产出并完成收尾后覆盖快照。
         # REPLAY/无快照回退不创建、不刷新快照。
-        snapshot_commit_allowed = not delivery_failed[0] and total_frames > 0
+        snapshot_commit_allowed = (not delivery_failed[0] and total_frames > 0
+                                   and request_stats.get("weather_status") != "failed")
+        if snapshot_commit_allowed:
+            commit = getattr(delta_iter, "commit_history", None)
+            if commit:
+                commit()
         if followup_kind is None and snapshot_commit_allowed:
             self._commit_last_round(text, reply_text, timing["route"])
         elif context_followup and snapshot_commit_allowed:

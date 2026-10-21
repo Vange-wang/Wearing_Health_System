@@ -1,0 +1,20 @@
+{
+  "state": "CANDIDATE_ONLY_INDEPENDENT_DELTA_REVIEW_PENDING",
+  "baseline_git_checkpoint": "8ba497ff4090c74fdbe166b4d204a943d3a87449",
+  "replace": [
+    {
+      "target": "voice-bridge/app/voice_v2_service.py",
+      "before_sha256": "148f01cd94cadf4dba65c842059486a37cb39d63b319fa589d6926c66518a558",
+      "candidate": "Code文档\\测试报告\\2026-10-18-BOX3真人交流恢复\\开发诊断\\R23-rewrite-candidate-v1\\R20-v2-preconnect-fix-v1\\source\\app\\voice_v2_service.py",
+      "candidate_sha256": "3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1"
+    }
+  ],
+  "pipeline_unchanged_sha256": "1cfa5ee865764bcefb7f2c273f407fdf53a4b8032ccb15666b02fcecdac6312e",
+  "turn_store_unchanged_sha256": "551f5fcb921840776bc84948894d1fb09d14f09d9594ac01419ac612490f0836",
+  "weather_unchanged_sha256": "0d9aa030c55b0144cce5be95b249141734c0ac90616ccbb8d33ab6587eb93e91",
+  "implementation": "Select existing LIGHTWEIGHT pipeline path only for ordinary V2 answers; preserve raw text/no followup behavior and actual weather/PendingAction slow path. Same bounded backend, no extra LLM fallback.",
+  "new_blocking_waits": 0,
+  "network_API_calls": 0,
+  "live_files_written": false,
+  "SDK_COM_service_calls": 0
+}

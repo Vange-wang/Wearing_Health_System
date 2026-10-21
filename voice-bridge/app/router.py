@@ -131,12 +131,12 @@ class Router:
         """
         # 能力询问优先：问「能不能/能否」→ 快路径直接答，不触发工具、不发安抚语
         if self._is_capability_ask(text):
-            logger.info("route=lightweight (capability ask: %s)", text)
+            logger.info("route=lightweight (capability ask chars=%d)", len(text))
             self._set_last_route(LIGHTWEIGHT)
             return LIGHTWEIGHT
         # 问候/礼貌/结束语（你好/谢谢/再见/晚安…）→ 快路径，不延续慢路径
         if self._is_polite(text):
-            logger.info("route=lightweight (polite: %s)", text)
+            logger.info("route=lightweight (polite chars=%d)", len(text))
             self._set_last_route(LIGHTWEIGHT)
             return LIGHTWEIGHT
         # DATA 只接收无知识意图的窄查询短语；知识/关系/方法问题不得被字段子串截胡。

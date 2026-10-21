@@ -1,0 +1,14 @@
+{
+  "state": "DEPLOYED_CODE_REVIEW_PASS_HUMAN_PENDING",
+  "baseline_git": "8ba497ff4090c74fdbe166b4d204a943d3a87449",
+  "runtime_voice_pid": 36016,
+  "runtime_pc_instance_sha256": "11bafe4232cc75ab6711785d6fa70ee5e153fe598ea419b1c9ab2601fa55c29a",
+  "changed_file": "voice-bridge/app/voice_v2_service.py",
+  "sha256": "3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1",
+  "review": "80 PASS",
+  "device_firmware_unchanged": "R20 display diagnostics 0f893650c80e5fa09a0b8c72f5352b4bb32f9673d47142306c8f452841814737",
+  "secrets_or_NVS_saved": false,
+  "synthetic_success_first_audio_frame_ms": 1412.2,
+  "synthetic_failures_also_observed": true,
+  "at_unix_s": 1792547431.1956763
+}

@@ -1,0 +1,51 @@
+{
+  "review": "80",
+  "status": "PASS",
+  "verdict": "ORDINARY_V2_EXISTING_PRECONNECT_PATH_RESTORED_SINGLE_PC_FILE_DEPLOYMENT_ADMITTED",
+  "reviewer_thread_id": "01a14d0c-ac62-70e0-b171-dfc6bf1a6e24",
+  "packet_manifest_sha256": "57360d8fb0d5e0da15791f9875864f6addefc95fdcca03f6b336ad6a0a1e2ce1",
+  "serious_findings": [],
+  "PC_single_file_deployment_admitted": true,
+  "scope": "Only source/app/voice_v2_service.py delta and specified four synthetic tests. Existing first-word priority and pipeline preconnect behavior are the basis; no new feature/framework or historical gate reopening.",
+  "review_axes": {
+    "order": ["Standards", "Spec"],
+    "Standards": {"findings": [], "conclusion": "Ordinary answers select existing LIGHTWEIGHT route with the same bounded backend. Identity text normalization and no followup classification preserve V2 input/history behavior. No pipeline, TurnStore, provider/config or firmware change."},
+    "Spec": {"findings": [], "conclusion": "Actual pipeline starts its owned preconnection while ordinary model transport is blocked, then uses that connection for audio. True weather and PendingAction retain routerNone/slow path. No new blocking wait or additional LLM fallback introduced."}
+  },
+  "binding": {
+    "packet_members_hash_and_size_verified": 7,
+    "target": "voice-bridge/app/voice_v2_service.py",
+    "current_live_before_sha256_verified": "148f01cd94cadf4dba65c842059486a37cb39d63b319fa589d6926c66518a558",
+    "candidate_sha256_verified": "3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1",
+    "pipeline_unchanged_sha256": "1cfa5ee865764bcefb7f2c273f407fdf53a4b8032ccb15666b02fcecdac6312e",
+    "turn_store_unchanged_sha256": "551f5fcb921840776bc84948894d1fb09d14f09d9594ac01419ac612490f0836",
+    "weather_unchanged_sha256": "0d9aa030c55b0144cce5be95b249141734c0ac90616ccbb8d33ab6587eb93e91",
+    "rollback_checkpoint": "Root-provided8ba497ff4090c74fdbe166b4d204a943d3a87449; source-binding records it, no Git mutation by reviewer."
+  },
+  "fresh_verification": {
+    "tests_run": 4,
+    "passed": 4,
+    "test_runtime_seconds": 0.76,
+    "tests": [
+      "Ordinary answer: preconnect opens before gated model returns; uses it and delivers WAV; original text/draft and private history preserved",
+      "Weather-enabled ordinary answer: same overlap and WAV behavior",
+      "Actual TurnStore continuation: cancels answer, retains prior ASR, closes early connection and clears output lease",
+      "Actual weather routing/search/formatting: synthetic weather provider, no idle preconnect, ordinary TTS produces WAV"
+    ],
+    "actual_logic": "Candidate VoiceV2Service.answer plus current real StreamingPipeline, TurnStore and weather modules; imported module origins and frozen hashes verified against live source paths. Only model transport/TTS/weather supplier edges synthetic.",
+    "PendingAction": "Static delta verification only: PendingAction backend is selected before router assignment, excluded by isinstance, then wrapped in the unchanged BoundedAnswer. Remains slow path; no fifth test added.",
+    "network": "Actual HTTP Client/AsyncClient transport dispatch blocked during the four tests. No real API requests or service operation.",
+    "warning": "Existing Python3.11 audioop deprecation warning only.",
+    "baseline_RED": "Frozen developer baseline-red log hash-bound and developer summary read; baseline not rerun and no live file replaced. Fresh four candidate checks establish overlap/cleanup behavior, not a numerical latency gain."
+  },
+  "allowed_boundary": {
+    "deployment": "Root may deploy only the bound candidate to voice-bridge/app/voice_v2_service.py for same-round PC verification under existing authorization. No other PC/model/proxy/pipeline/TurnStore/firmware modification admitted.",
+    "reviewer_deployment_or_service_restart": false,
+    "real_SDK_COM_service_network_API_actions": 0,
+    "writes": "This JSON only; project Python-B four-test run, pytest cache disabled, no candidate/live source writes.",
+    "no_reply_issue_closed": false,
+    "first_word_pass": false,
+    "human_pass": false,
+    "latency_limit": "Real provider connection lifetime/latency and audible first-word gain remain unmeasured here. Synthetic test duration is not first-word latency. Prior live no-response and human acceptance remain open."
+  }
+}

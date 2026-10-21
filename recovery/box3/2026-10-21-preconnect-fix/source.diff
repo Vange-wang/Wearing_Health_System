@@ -1,0 +1,29 @@
+--- live/app/voice_v2_service.py
++++ candidate/app/voice_v2_service.py
+@@ -9,6 +9,7 @@
+ from .turn_asr import TurnASR
+ from .weather import WeatherRouteCandidate, OpenMeteoWeatherSearch
+ from .pipeline import StreamingPipeline, TimingRecord
++from .router import LIGHTWEIGHT
+ from .voice_turn import TurnStore, Limits, TurnError
+ from .stream_resources import OwnedSyncStream
+ 
+@@ -103,10 +104,17 @@
+         backend=model
+         if self.weather:
+             backend=WeatherRouteCandidate(model,model,OpenMeteoWeatherSearch(),enabled=True,general_locations=True)
++        weather_request=self.weather and backend.handles_current_weather(text)
+         if any(word in text for word in WRITE_INTENTS):backend=PendingAction(history)
++        router=None
++        if not weather_request and not isinstance(backend,PendingAction):
++            # V2 keeps its text/followup semantics; only select the existing fast path.
++            router=SimpleNamespace(normalize_asr=lambda value:value,
++                                   classify_followup=lambda value:None,
++                                   route=lambda *_:LIGHTWEIGHT)
+         backend=BoundedAnswer(backend)
+         pipe=StreamingPipeline(None,backend,self.tts,None,sentence_gap_ms=0,
+-                               max_frame_bytes=256*1024,tts_workers=2,queue_capacity=4)
++                               max_frame_bytes=256*1024,tts_workers=2,queue_capacity=4,router=router)
+         self.outcome('answer','running')
+         timing=TimingRecord();timing.captions_enabled=True;timing.private_input=True
+         gen=pipe.run_text(text,timing)

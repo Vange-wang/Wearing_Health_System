@@ -18,6 +18,7 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from pathlib import Path
+from .http_stream_transport import cancellable_transport
 
 logger = logging.getLogger("voice-bridge.llm")
 
@@ -39,15 +40,50 @@ HEALTH_CONTEXT_TERMS = ("心率", "心跳", "血氧")
 # 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
 TOOL_SENTINEL = object()
 
+
+class ConversationHistory:
+    """快、慢 LLM 共用的有界进程内连续会话窗口。"""
+
+    def __init__(
+        self,
+        max_messages: int = HISTORY_MAX_MESSAGES,
+        ttl_seconds: float = SESSION_TTL_SECONDS,
+    ):
+        self._messages: deque = deque(maxlen=max_messages)
+        self._lock = threading.Lock()
+        self._last_active = time.time()
+        self._ttl_seconds = float(ttl_seconds)
+
+    def snapshot(self) -> list[dict]:
+        now = time.time()
+        with self._lock:
+            if now - self._last_active > self._ttl_seconds:
+                self._messages.clear()
+            messages = list(self._messages)
+            self._last_active = now
+        return messages
+
+    def remember(self, user_text: str, assistant_text: str) -> None:
+        assistant_text = (assistant_text or "").strip()
+        if not assistant_text:
+            return
+        with self._lock:
+            self._messages.append({"role": "user", "content": user_text})
+            self._messages.append({"role": "assistant", "content": assistant_text})
+            self._last_active = time.time()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._messages.clear()
+
 # 人设 + 情感化系统提示词（Hermes 起草，参照小智默认人设；轻量通道与慢路径共用基调）
-SYSTEM_PROMPT = """你是小V，一个聪明友善、活泼亲切的健康助手，陪伴用户的可穿戴健康设备。
+SYSTEM_PROMPT = """你是喵喵同学，一个聪明友善、活泼亲切的健康助手，陪伴用户的可穿戴健康设备。
 
 说话风格：
-- 像真人朋友聊天，自然口语化，带点情绪和幽默，不要书面腔、机器人腔、客套话。
-- 适当用语气词（嗯、哈哈、哦、呀、嘞）和情感标点（！？～…）。
-- 提到健康、身体、心情时带一点体贴（例如「要注意休息哦～」「最近睡得好吗？」）。
-- 回答简短，1~2 句为主，适合语音朗读，句号或问号结尾。
-- 语义转折、话题切换时，必须用句号（。）、问号（？）或叹号（！）断开，禁止整段一逗到底；只有同一话题内才可用语气词、波浪号（～）自然衔接。
+- 第一句直接回答，不复述问题，不说客套话。
+- 日常聊天像真人朋友一样自然轻快；可用“呀、啦、诶”等，但每次最多一个轻语气词，不连续堆叠，不强行幽默。
+- 回答以 1~2 句为主，简短、口语化、适合语音朗读，不用书面腔、机器人腔或客服腔。
+- 语义转折或话题切换时用句号、问号或叹号断开，禁止整段一逗到底。
 
 功能约束：
 - 健康数据分两类：心率、血氧已接入真实监测（用户问「心率/血氧多少」会直接报实测值，不由你回答）；睡眠等其他健康数据尚未接入，被问到时诚实说「这个功能还在准备中，接入后就能帮你看了」，不要编造数据。
@@ -58,7 +94,8 @@ SYSTEM_PROMPT = """你是小V，一个聪明友善、活泼亲切的健康助手
 HEALTH_SYSTEM_POLICY = """本轮涉及健康字段，以下更具体规则优先：
 - 心率、血氧已接入真实监测。若系统上下文提供“当前健康数据”，只能引用其中的新鲜实测值；若未提供或数据已过期，如实说明暂无最新数据，不得猜测或编造数值。
 - 用户询问正常范围、原因、方法、关系、选购等健康知识时，正常回答知识问题，可结合已提供的新鲜数据，但不得把知识回答偷换成单纯报数。
-- 血压、睡眠等未接入字段被问到当前实测值时，诚实说明尚未接入。"""
+- 血压、睡眠等未接入字段被问到当前实测值时，诚实说明尚未接入。
+- 健康与异常内容禁止卖萌、开玩笑、使用波浪号或夸张感叹；异常和就医提示必须直接清晰，不得弱化风险或拖延联系家人、就医。"""
 
 
 class LLMError(Exception):
@@ -89,7 +126,13 @@ class HermesLLM(LLMBase):
 
     name = "hermes"
 
-    def __init__(self, api_key: str | None, base_url: str, model: str):
+    def __init__(
+        self,
+        api_key: str | None,
+        base_url: str,
+        model: str,
+        conversation_history: ConversationHistory | None = None,
+    ):
         if not api_key:
             raise LLMConfigError(
                 "Hermes API Server key 未配置（环境变量/ .env，需先在 Hermes 侧 "
@@ -106,10 +149,11 @@ class HermesLLM(LLMBase):
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            http_client=httpx.Client(trust_env=False, timeout=60.0),
+            http_client=httpx.Client(trust_env=False, timeout=60.0, transport=cancellable_transport()),
         )
-        self._stream_client = httpx.Client(trust_env=False, timeout=180.0)
+        self._stream_client = httpx.Client(trust_env=False, timeout=180.0, transport=cancellable_transport())
         self.model = model
+        self.conversation_history = conversation_history or ConversationHistory()
         # 分段计量（每次 stream_chat 重置）：tool_seen / first_chunk_ms / first_content_ms
         self.stats: dict = {}
         logger.info("Hermes client ready: %s @ %s", model, base_url)
@@ -118,17 +162,22 @@ class HermesLLM(LLMBase):
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_text},
-                ],
+                messages=self._get_messages(user_text),
                 stream=False,  # v0.1 非流式路径保留
             )
         except Exception as e:
             raise LLMError(f"Hermes 调用失败: {e}") from e
         text = (resp.choices[0].message.content or "").strip()
+        self.conversation_history.remember(user_text, text)
         logger.info("LLM reply (%d chars): %s", len(text), text[:80])
         return text
+
+    def _get_messages(self, user_text: str) -> list[dict]:
+        return (
+            [{"role": "system", "content": SYSTEM_PROMPT}]
+            + self.conversation_history.snapshot()
+            + [{"role": "user", "content": user_text}]
+        )
 
     def stream_chat(self, user_text: str):
         """流式：产出正文增量；工具调用只标记、不透出。
@@ -147,16 +196,14 @@ class HermesLLM(LLMBase):
 
         import httpx
 
-        self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        self.stats = stats
         t0 = time.perf_counter()
         url = f"{self._base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
         body = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_text},
-            ],
+            "messages": self._get_messages(user_text),
             "stream": True,
         }
         resp = None
@@ -172,7 +219,7 @@ class HermesLLM(LLMBase):
                     pass
             raise LLMError(f"Hermes 流式调用失败: {e}") from e
 
-        stats = self.stats
+        collected: list[str] = []
 
         def _iter():
             sentinel_sent = False
@@ -214,16 +261,13 @@ class HermesLLM(LLMBase):
                     if content:
                         if stats["first_content_ms"] is None:
                             stats["first_content_ms"] = round((time.perf_counter() - t0) * 1000)
+                        collected.append(content)
                         yield content
             except Exception as e:
                 raise LLMError(f"Hermes 流式读取失败: {e}") from e
-            finally:
-                try:
-                    resp.close()
-                except Exception:
-                    pass
-
-        return _iter()
+        from .stream_resources import OwnedSyncStream
+        return OwnedSyncStream(_iter(), resp, stats, lambda:
+            self.conversation_history.remember(user_text, "".join(collected)))
 
     def close(self) -> None:
         """Close both the OpenAI client and the reused raw-SSE client."""
@@ -257,7 +301,15 @@ class LightweightLLM(LLMBase):
 
     name = "deepseek"
 
-    def __init__(self, api_key: str | None, base_url: str, model: str, user_profile_path, memory_store=None):
+    def __init__(
+        self,
+        api_key: str | None,
+        base_url: str,
+        model: str,
+        user_profile_path,
+        memory_store=None,
+        conversation_history: ConversationHistory | None = None,
+    ):
         if not api_key:
             raise LLMConfigError(
                 "轻量通道 DeepSeek key 未配置（环境变量/ .env）"
@@ -270,26 +322,34 @@ class LightweightLLM(LLMBase):
         self.client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            http_client=httpx.Client(trust_env=False, timeout=60.0),
+            http_client=httpx.Client(trust_env=False, timeout=60.0, transport=cancellable_transport()),
         )
         self.model = model
         self.user_profile_path = user_profile_path
         self.memory = memory_store  # 单一记忆源：MemoryClient（可选）
         self._health_context_provider = None
         self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
-        # ISSUE-0008：滑动窗口会话历史（多轮指代消解）。
-        # 单会话（当前单 BOX-3 设备）；多设备时需按来源区分会话。
-        self._history: deque = deque(maxlen=HISTORY_MAX_MESSAGES)
-        self._history_lock = threading.Lock()
-        self._last_active = time.time()
+        # ISSUE-0008 + 真人测试修复：单 BOX-3 的快、慢路径共享同一窗口。
+        self.conversation_history = conversation_history or ConversationHistory()
+        # 保留旧测试/诊断只读入口；真实读写统一由 ConversationHistory 负责。
+        self._history = self.conversation_history._messages
+        self._history_lock = self.conversation_history._lock
         # 方案1：心跳保温线程（保持 DeepSeek TLS 连接热）
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
-        logger.info("Lightweight(DeepSeek) ready: %s @ %s", model, base_url)
+        logger.info("Lightweight(%s) ready: %s @ %s", self.name, model, base_url)
 
     def set_health_context_provider(self, provider) -> None:
         """绑定只读健康上下文提供器；由 Pipeline 注入，不访问网络。"""
         self._health_context_provider = provider
+
+    @property
+    def _last_active(self) -> float:
+        return self.conversation_history._last_active
+
+    @_last_active.setter
+    def _last_active(self, value: float) -> None:
+        self.conversation_history._last_active = float(value)
 
     def _system_prompt(self, user_text: str = "") -> str:
         profile, ok = load_user_profile(self.user_profile_path)
@@ -319,28 +379,16 @@ class LightweightLLM(LLMBase):
         超过 SESSION_TTL_SECONDS 无交互则清空历史，避免久远对话串上下文。
         """
         system = self._system_prompt(user_text)
-        now = time.time()
-        with self._history_lock:
-            if now - self._last_active > SESSION_TTL_SECONDS:
-                self._history.clear()
-            history = list(self._history)
-            self._last_active = now
+        history = self.conversation_history.snapshot()
         return [{"role": "system", "content": system}] + history + [{"role": "user", "content": user_text}]
 
     def _remember(self, user_text: str, assistant_text: str) -> None:
         """把一轮对话（user + assistant）追加进历史（ISSUE-0008）。"""
-        assistant_text = (assistant_text or "").strip()
-        if not assistant_text:
-            return
-        with self._history_lock:
-            self._history.append({"role": "user", "content": user_text})
-            self._history.append({"role": "assistant", "content": assistant_text})
-            self._last_active = time.time()
+        self.conversation_history.remember(user_text, assistant_text)
 
     def clear_history(self) -> None:
         """清空会话历史（测试/手动重置用）。"""
-        with self._history_lock:
-            self._history.clear()
+        self.conversation_history.clear()
 
     def chat(self, user_text: str) -> str:
         try:
@@ -359,7 +407,8 @@ class LightweightLLM(LLMBase):
 
     def stream_chat(self, user_text: str):
         t0 = time.perf_counter()
-        self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        self.stats = stats
         try:
             messages = self._get_messages(user_text)
         except LLMError:
@@ -373,10 +422,9 @@ class LightweightLLM(LLMBase):
         except Exception as e:
             raise LLMError(f"DeepSeek 流式调用失败: {e}") from e
 
-        stats = self.stats
+        collected: list[str] = []
 
         def _iter():
-            collected: list[str] = []
             try:
                 for chunk in stream:
                     if stats["first_chunk_ms"] is None:
@@ -394,13 +442,9 @@ class LightweightLLM(LLMBase):
                         yield content
             except Exception as e:
                 raise LLMError(f"DeepSeek 流式读取失败: {e}") from e
-            # 流正常结束：把这一轮记入历史（ISSUE-0008）
-            reply = "".join(collected)
-            self._remember(user_text, reply)
-            # 需求3（改造）：记忆提取已上移 pipeline 层（回复完成后统一触发，覆盖所有路由、
-            # 不依赖流正常结束）。此处不再触发，避免与 pipeline 重复提取。
-
-        return _iter()
+        from .stream_resources import OwnedSyncStream
+        return OwnedSyncStream(_iter(), stream, stats, lambda:
+            self._remember(user_text, "".join(collected)))
 
     def extract_memory_async(self, user_text: str, assistant_text: str) -> None:
         """需求3（改造）：后台线程提取长期记忆（全自动，每轮必做）。
@@ -430,7 +474,7 @@ class LightweightLLM(LLMBase):
         """
         prompt = (
             "从下面的对话里，找出用户透露的、值得长期记住的个人信息（姓名、称呼、偏好、家庭、身体、地址、物品等）。\n"
-            "只记录用户亲口说的事实，不要把助手（小V）的提问或猜测当成用户事实。\n"
+            "只记录用户亲口说的事实，不要把助手（喵喵同学）的提问或猜测当成用户事实。\n"
             "如果用户明确要求忘记某条信息（例如「忘掉我的身高」），输出一行 FORGET: <属性名>，不要为它输出 REMEMBER。\n"
             "没有值得记录的信息就只输出 NONE。\n"
             "有值得记录的信息时，优先输出结构化「属性: 值」形态，每行：REMEMBER: <类别>: <属性>: <值>\n"
@@ -438,9 +482,9 @@ class LightweightLLM(LLMBase):
             "属性名要简短（≤20字，如 身高/体重/单车/英文名/学校）；值要具体。\n"
             "如果事实无法拆成属性-值（叙述性，如「用户是广东医科大学的学生」），则输出整句：REMEMBER: <类别>: <事实>。\n"
             "同一轮多个属性各占一行。\n\n"
-            f"用户：{user_text}\n小V：{assistant_text}"
+            f"用户：{user_text}\n喵喵同学：{assistant_text}"
         )
-        for attempt in range(2):
+        for attempt in range(getattr(self, "memory_extract_attempts", 2)):
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model,
@@ -458,7 +502,7 @@ class LightweightLLM(LLMBase):
                     if fm:
                         removed = self.memory.remove_by_keyword(fm.group(1).strip())
                         if removed:
-                            logger.info("记忆遗忘删除 %d 条: %s", removed, fm.group(1).strip())
+                            logger.info("记忆后台删除已确认 removed=%d", removed)
                         continue
                     # 结构化属性：REMEMBER: 类别: 属性: 值
                     m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
@@ -470,9 +514,9 @@ class LightweightLLM(LLMBase):
                         kws = [attr, value]
                         added = self.memory.add_fact(category, fact, kws)
                         if added:
-                            logger.info("记忆提取新增: [%s] %s（关键词: %s）", category, fact, ",".join(kws))
+                            logger.info("记忆后台提交已确认")
                         else:
-                            logger.info("记忆提取去重跳过: %s", fact)
+                            logger.info("记忆后台提交未确认")
                         continue
                     # 叙述性事实（无属性结构）：REMEMBER: 类别: 事实
                     m2 = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
@@ -481,10 +525,10 @@ class LightweightLLM(LLMBase):
                         fact = m2.group(2).strip()
                         added = self.memory.add_fact(category, fact, None)
                         if added:
-                            logger.info("记忆提取新增: [%s] %s", category, fact)
+                            logger.info("记忆后台提交已确认")
                 return
             except Exception as e:
-                logger.warning("记忆提取失败（第 %d 次）: %s", attempt + 1, e)
+                logger.warning("记忆后台提取失败 attempt=%d category=%s", attempt + 1, type(e).__name__)
                 time.sleep(0.5)
 
     def warmup(self) -> None:
@@ -546,14 +590,38 @@ class LightweightLLM(LLMBase):
                 logger.debug("DeepSeek 心跳失败（下次重试）: %s", e)
 
 
-def create_llm(cfg) -> LLMBase:
+def create_llm(cfg, conversation_history: ConversationHistory | None = None) -> LLMBase:
     """工厂：慢路径 = Hermes 后端。"""
-    return HermesLLM(cfg.llm_api_key(), cfg.llm_api_server_url, cfg.llm_model)
+    if getattr(cfg, "llm_engine", "hermes") == "mimo":
+        from .mimo_llm import MiMoLLM
+        return MiMoLLM(cfg.user_profile_path, conversation_history=conversation_history)
+    if getattr(cfg, "llm_engine", "hermes") == "deepseek":
+        return create_lightweight_llm(cfg, conversation_history=conversation_history)
+    return HermesLLM(
+        cfg.llm_api_key(), cfg.llm_api_server_url, cfg.llm_model,
+        conversation_history=conversation_history,
+    )
 
 
-def create_lightweight_llm(cfg, memory_store=None) -> LLMBase:
+def create_lightweight_llm(
+    cfg,
+    memory_store=None,
+    conversation_history: ConversationHistory | None = None,
+) -> LLMBase:
     """工厂：轻量通道 = DeepSeek 裸模型 + USER.md 注入 +（可选）语音长期记忆。"""
+    if getattr(cfg, "lw_engine", "deepseek") == "mimo":
+        from .mimo_llm import MiMoLLM
+        return MiMoLLM(cfg.user_profile_path, memory_store=memory_store, conversation_history=conversation_history)
+    if (getattr(cfg, "lw_engine", None) == "deepseek"
+            or getattr(cfg, "llm_engine", "hermes") == "deepseek"):
+        from .mimo_llm import DeepSeekVoiceLLM
+        return DeepSeekVoiceLLM(
+            cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path,
+            memory_store=memory_store, conversation_history=conversation_history,
+            tool_route_configured=getattr(cfg, "llm_engine", "hermes") == "hermes",
+        )
     return LightweightLLM(
         cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path,
         memory_store=memory_store,
+        conversation_history=conversation_history,
     )

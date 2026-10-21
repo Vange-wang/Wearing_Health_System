@@ -13,6 +13,7 @@
 错误码：按 Spec §5.4 错误处理表完整实现。
 """
 import asyncio
+import io
 import json
 import logging
 import tempfile
@@ -34,13 +35,19 @@ from .audio_input import (
     read_upload_bounded,
     validate_wav,
 )
-from .asr import ASRModelLoadError, create_asr, create_streaming_asr, read_wav_16k_mono
+from .asr import ASRError, ASRModelLoadError, create_asr, create_streaming_asr, read_wav_16k_mono
 from .config import load_config
 from .device_auth import install_device_auth, require_device_token
-from .health import HealthDataStore
+from .health import HealthDataStore, HealthIdentityError
 from .wechat_alert import WechatAlertPusher, process_wechat_outbox_once
 from .knowledge import KnowledgeBase
-from .llm import LLMConfigError, LLMError, create_lightweight_llm, create_llm
+from .llm import (
+    ConversationHistory,
+    LLMConfigError,
+    LLMError,
+    create_lightweight_llm,
+    create_llm,
+)
 from .memory import MemoryClient
 from .pipeline import (
     FrameTooLargeError,
@@ -50,9 +57,12 @@ from .pipeline import (
     encode_frame,
 )
 from .router import Router
-from .schemas import HealthDataIn, HealthResponse, TTSHealth
+from .schemas import HealthDataIn, HealthDataStatus, HealthResponse, TTSHealth
 from .tts import TTSError, create_tts, probe_edge
 from .vad import VADGate
+from .stream_resources import RequestResources
+from .response_owner import VoiceStreamOwner, OwnedStreamingResponse
+from .first_frame import first_frame_or_disconnect
 
 logger = logging.getLogger("voice-bridge")
 
@@ -65,10 +75,29 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     await startup()
+    discovery = None
+    _app.state.discovery_runtime = None
+    _app.state.discovery_error = None
     try:
+        try:
+            from .discovery_runtime import DiscoveryRuntime
+            discovery = DiscoveryRuntime(_app.state.device_auth)
+            _app.state.discovery_runtime = discovery
+            discovery.start()
+        except Exception:
+            _app.state.discovery_error = "INITIALIZATION_FAILED"
+            logger.error("discovery lifecycle initialization failed")
         yield
     finally:
-        await shutdown()
+        try:
+            if discovery is not None:
+                try:
+                    await asyncio.to_thread(discovery.close)
+                except Exception:
+                    _app.state.discovery_error = "CLOSE_FAILED"
+                    logger.error("discovery lifecycle close failed")
+        finally:
+            await shutdown()
 
 
 app = FastAPI(title="voice-bridge", version="0.4", lifespan=lifespan)
@@ -92,6 +121,58 @@ wechat_pusher = None
 # One BOX-3 owns ASR/LLM/TTS at a time. Acquisition is always non-blocking so
 # a busy request does not add queueing delay to the first-word path.
 voice_session_lock = VoiceSessionLock()
+_background_tasks: set[asyncio.Task] = set()
+_startup_resources = RequestResources()
+
+# Opt-in isolated protocol; v1 routes and leases remain unchanged.
+from .voice_v2 import make_router as make_voice_v2_router
+from .voice_v2_service import VoiceV2Service
+from .voice_turn import Limits as VoiceV2Limits
+_voice_v2_service = None
+_voice_v2_asr = None
+
+def _resolve_voice_v2():
+    global _voice_v2_service
+    if not cfg.voice_v2_enabled:
+        return None
+    if _voice_v2_service is None:
+        if _voice_v2_asr is None or lightweight_llm is None or tts is None:
+            return None
+        _voice_v2_service = VoiceV2Service(
+            _voice_v2_asr, lightweight_llm, tts,
+            limits=VoiceV2Limits(**cfg.voice_v2_limits),
+            weather=bool(getattr(llm, 'enabled', False)),
+        )
+    return _voice_v2_service
+
+app.include_router(make_voice_v2_router(_resolve_voice_v2))
+
+
+def _background_task(coroutine):
+    task = asyncio.create_task(coroutine)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+def _wav_input(data):
+    if getattr(asr, "name", None) == "mimo":
+        return io.BytesIO(data)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(data)
+        return Path(tmp.name)
+
+
+def _close_wav_input(source):
+    if isinstance(source, io.BytesIO):
+        view = source.getbuffer()
+        view[:] = b"\x00" * len(view)
+        view.release()
+        source.close()
+    else:
+        source.unlink(missing_ok=True)
+
+
 asr_load_error: str | None = None
 streaming_asr_load_error: str | None = None
 llm_config_error: str | None = None
@@ -102,6 +183,11 @@ async def startup():
     """启动时预加载模型、构造流水线并探测 edge 连通性（Spec §5.1 health）。"""
     global asr, streaming_asr, llm, lightweight_llm, tts, vad, pipeline, knowledge, health_store
     global alert_outbox, wechat_pusher
+    global _startup_resources, _voice_v2_asr
+    if cfg.voice_v2_enabled and cfg.weather_enabled:
+        from .weather_dns import cache as weather_dns_cache
+        weather_dns_cache.start()
+    _startup_resources = RequestResources()
     global asr_load_error, streaming_asr_load_error, llm_config_error, tts_load_error
     try:
         asr = create_asr(cfg)
@@ -109,44 +195,63 @@ async def startup():
         asr_load_error = str(e)
         logger.error("ASR 预加载失败: %s", e)
     try:
-        streaming_asr = create_streaming_asr(cfg)  # v0.4 A2 流式
+        streaming_asr = (asr if getattr(cfg, "asr_engine", "sherpa") == "mimo" and asr is not None
+                         else create_streaming_asr(cfg))
     except ASRModelLoadError as e:
         streaming_asr_load_error = str(e)
         logger.error("流式 ASR 加载失败: %s", e)
+    if cfg.voice_v2_enabled:
+        from .turn_asr import select_turn_asr
+        _voice_v2_asr = select_turn_asr(cfg, asr)
+    conversation_history = ConversationHistory()
     try:
-        llm = create_llm(cfg)  # 慢路径 Hermes
+        llm = create_llm(cfg, conversation_history=conversation_history)  # 慢路径 Hermes
     except LLMConfigError as e:
         llm_config_error = str(e)
-        logger.error("LLM(Hermes) 配置失败: %s", e)
+        logger.error("LLM 配置失败: %s", e)
     # 单一记忆源（v2）：MemoryClient——注入本地读 USER.md/MEMORY.md，写删走 memory_server HTTP
     memory_client = MemoryClient(
-        cfg.memory_api_url, cfg.user_profile_path, cfg.memory_file_path, cfg.memory_inject_budget
+        cfg.memory_api_url, cfg.user_profile_path, cfg.memory_file_path, cfg.memory_inject_budget,
+        api_key=cfg.llm_api_key(),
     )
     try:
-        lightweight_llm = create_lightweight_llm(cfg, memory_store=memory_client)  # 轻量通道 DeepSeek
+        if (getattr(cfg, "llm_engine", "hermes") in {"mimo", "deepseek"}
+                and getattr(cfg, "lw_engine", "deepseek") == cfg.llm_engine
+                and llm is not None):
+            lightweight_llm = llm
+            lightweight_llm.memory = memory_client
+        else:
+            lightweight_llm = create_lightweight_llm(
+                cfg,
+                memory_store=memory_client,
+                conversation_history=conversation_history,
+            )
     except LLMConfigError as e:
-        logger.warning("轻量通道 DeepSeek 配置缺失: %s（轻量/知识库降级走慢路径）", e)
+        logger.warning("轻量通道配置失败: %s", e)
         lightweight_llm = None
+    if cfg.weather_enabled:
+        if llm is None or lightweight_llm is None or cfg.llm_engine != "hermes" or cfg.lw_engine != "deepseek":
+            raise RuntimeError("Weather fast path requires Hermes and DeepSeek")
+        from .weather import WeatherRouteCandidate, OpenMeteoWeatherSearch
+        llm = WeatherRouteCandidate(llm, lightweight_llm, OpenMeteoWeatherSearch(),
+                                    enabled=True, cities=cfg.weather_cities)
     if lightweight_llm is not None:
         # A7：后台预热 DeepSeek（消除首次按键冷启动 ~2s 尖峰）
-        asyncio.create_task(asyncio.to_thread(lightweight_llm.warmup))
+        _background_task(_startup_resources.call(lightweight_llm.warmup))
         # 方案1：周期心跳保温（保持 TLS 连接热，llm_ttft 稳定 ~500ms）
         lightweight_llm.start_heartbeat()
     try:
         tts = create_tts(cfg)
-        await probe_edge(tts, cfg.tts_edge_probe_timeout)
+        await probe_edge(tts, cfg.tts_probe_timeout)
     except Exception as e:
         tts_load_error = str(e)
         logger.error("TTS 初始化失败: %s", e)
 
     # 需求1：TTS 周期探活（每 5 分钟真实合成一次，更新 last_probe_ok/ts 供固件状态灯）
     async def _tts_probe_loop():
-        while True:
-            await asyncio.sleep(cfg.tts_probe_interval_s)
-            if tts is not None:
-                await tts.probe()
+        await tts.maintain_health(cfg.tts_probe_interval_s)
     if tts is not None:
-        asyncio.create_task(_tts_probe_loop())
+        _background_task(_tts_probe_loop())
 
     vad = VADGate(
         enabled=cfg.vad_enabled,
@@ -191,12 +296,13 @@ async def startup():
         alert_consecutive=cfg.health_alert_consecutive,
         alert_cooldown_s=cfg.health_alert_cooldown_s,
         alert_cb=_queue_health_alert,
+        data_stale_seconds=cfg.health_data_stale_seconds,
     )
 
     async def _wechat_outbox_loop() -> None:
         while True:
             try:
-                await asyncio.to_thread(
+                await _startup_resources.call(
                     process_wechat_outbox_once,
                     alert_outbox,
                     wechat_pusher,
@@ -205,7 +311,7 @@ async def startup():
                 logger.exception("微信告警出站箱后台处理异常")
             await asyncio.sleep(10)
 
-    asyncio.create_task(_wechat_outbox_loop())
+    _background_task(_wechat_outbox_loop())
 
     # 慢路径安抚语预合成（query 池，随机轮换）。快路径 ack 已删除（首字延迟达标）。
     acknowledgements = {"query": []}
@@ -213,7 +319,7 @@ async def startup():
     if tts is not None and ack_texts:
         async def _synth_one(text):
             try:
-                return await tts.synthesize(text)
+                return (text, await tts.synthesize(text))
             except Exception as e:
                 logger.warning("安抚语预合成失败(%s): %s", text, e)
                 return None
@@ -245,6 +351,17 @@ async def startup():
 
 async def shutdown():
     """Stop background LLM activity and close reusable HTTP connections."""
+    from .weather_dns import cache as weather_dns_cache
+    await asyncio.to_thread(weather_dns_cache.close)
+    if _voice_v2_service is not None:
+        await _voice_v2_service.close()
+    tasks = list(_background_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    _background_tasks.clear()
+    await _startup_resources.aclose()
     closed: set[int] = set()
     for backend in (lightweight_llm, llm):
         if backend is None or id(backend) in closed:
@@ -255,13 +372,19 @@ async def shutdown():
             await asyncio.to_thread(close)
 
 
-@app.get("/api/v1/health", response_model=HealthResponse)
+@app.get("/api/v1/health")
+def health_compat():
+    from .health_compat import compact_health
+    return JSONResponse(content=compact_health(health()))
+
+
+@app.get("/api/v1/health/details", response_model=HealthResponse)
 def health():
     if tts is not None:
         tts_health = TTSHealth(**tts.health())
     else:
         tts_health = TTSHealth(
-            configured_primary="edge",
+            configured_primary=cfg.tts_primary,
             active_engine="unavailable",
             fallback_reason=None,
         )
@@ -280,14 +403,34 @@ def health():
         and tts_health.active_engine != "unavailable"
         and tts_health.last_probe_ok is True
     )
-    runtime_ready = asr_ready and llm_ready and tts_ready and pipeline is not None
+    cloud_last_call_healthy = all(
+        getattr(backend, "last_call_ok", None) is not False
+        for backend in (asr, streaming_asr, llm, lightweight_llm)
+    )
+    runtime_ready = asr_ready and llm_ready and tts_ready and pipeline is not None and cloud_last_call_healthy
     return HealthResponse(
         status="ok" if runtime_ready else "degraded",
         asr="ready" if asr_ready else "unavailable",
         tts=tts_health,
         vad="enabled" if (vad is not None and vad.enabled) else "disabled",
-        llm="hermes" if llm is not None else "unavailable",
+        llm=getattr(llm, "name", "hermes") if llm is not None else "unavailable",
         device_auth=auth_status,
+        providers={
+            "asr": {"provider": getattr(streaming_asr, "name", "sherpa") if streaming_asr is not None else "unavailable",
+                    "model": getattr(streaming_asr, "model", "zipformer"),
+                    "input_mode": getattr(streaming_asr, "input_mode", "streaming"),
+                    "last_cloud_call_ok": getattr(streaming_asr, "last_call_ok", None)},
+            "llm": {"provider": getattr(llm, "name", "unavailable"), "model": getattr(llm, "model", None),
+                    "response_model": getattr(llm, "last_response_model", None),
+                    "last_cloud_call_ok": getattr(llm, "last_call_ok", None),
+                    "tools_available": getattr(llm, "tools_available", True)},
+            "lightweight": {"provider": getattr(lightweight_llm, "name", "unavailable"), "model": getattr(lightweight_llm, "model", None),
+                            "response_model": getattr(lightweight_llm, "last_response_model", None),
+                            "last_cloud_call_ok": getattr(lightweight_llm, "last_call_ok", None)},
+            "tts": {"provider": tts_health.active_engine,
+                    "model": "mimo-v2.5-tts" if tts_health.active_engine == "mimo" else None,
+                    "last_cloud_call_ok": tts_health.last_probe_ok},
+        },
     )
 
 
@@ -299,8 +442,22 @@ def health_data(data: HealthDataIn):
     """BOX-3 上报健康数据 → 缓存 + 阈值判定（BLE 立项 P3）。"""
     if health_store is None:
         return _err(503, "service_unavailable", "健康数据模块未初始化")
-    health_store.update(data.hr, data.spo2, data.seq, data.flags, data.quality)
-    return JSONResponse(status_code=200, content={"status": "ok"})
+    try:
+        status = health_store.update(data.hr, data.spo2, data.seq, data.flags, data.quality,
+                                     source_epoch=data.source_epoch, source_index=data.source_index,
+                                     source_age_ms=data.source_age_ms)
+    except HealthIdentityError as exc:
+        return _err(409, str(exc), "健康源身份不一致或已过期")
+    return JSONResponse(status_code=200, content={"status": status})
+
+
+@app.get("/api/v1/health/data/status", response_model=HealthDataStatus,
+         dependencies=[Depends(require_device_token)])
+def health_data_status():
+    if health_store is None:
+        return HealthDataStatus(module_ready=False, hr_available=False, spo2_available=False,
+                                source_age_verified=False, state="unavailable")
+    return HealthDataStatus(**health_store.data_status(cfg.health_data_stale_seconds))
 
 
 @app.get(
@@ -322,7 +479,7 @@ async def health_alert():
         parts.append(f"心率 {int(round(hr))}")
     if spo2 is not None:
         parts.append(f"血氧 {int(round(spo2))}")
-    text = "小V提醒您，" + "、".join(parts) + "，建议坐下来休息一下。"
+    text = "喵喵同学提醒您，" + "、".join(parts) + "，建议坐下来休息一下。"
     try:
         wav = await tts.synthesize(text)
         frame = encode_frame(wav, cfg.pipeline_max_frame_bytes)
@@ -393,15 +550,18 @@ async def voice_chat(audio: UploadFile = File(...)):
         except AudioInputError as e:
             return _err(400, "bad_audio_format", str(e))
 
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(data)
-            wav_path = Path(tmp.name)
+        wav_path = _wav_input(data)
 
         timing = {"asr_ms": None, "llm_ms": None, "tts_ms": None, "total_ms": None}
         try:
             t = time.perf_counter()
             try:
-                text = await asyncio.to_thread(asr.transcribe, wav_path)
+                if callable(getattr(asr, "transcribe_async", None)):
+                    text = await asr.transcribe_async(wav_path)
+                else:
+                    text = await asyncio.to_thread(asr.transcribe, wav_path)
+            except ASRError as e:
+                return _err(502, "upstream_error", str(e))
             except ValueError as e:
                 msg = str(e)
                 if "audio_too_long" in msg:
@@ -429,7 +589,7 @@ async def voice_chat(audio: UploadFile = File(...)):
                 return _err(502, "upstream_error", f"TTS: {e}")
             timing["tts_ms"] = _ms(t)
         finally:
-            wav_path.unlink(missing_ok=True)
+            _close_wav_input(wav_path)
 
         timing["total_ms"] = _ms(t0)
         logger.info(json.dumps({
@@ -477,8 +637,11 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
     if not voice_session_lock.try_acquire():
         return _err(409, "device_busy", "语音会话正在处理")
 
+    owner = VoiceStreamOwner(voice_session_lock)
     handed_to_response = False
     wav_path: Path | None = None
+    gen = None
+    request_timing = None
     try:
         try:
             data = await read_upload_bounded(audio, cfg.pipeline_max_input_bytes)
@@ -489,9 +652,7 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
             return _err(400, "bad_audio_format", str(e))
 
         t0 = time.perf_counter()  # 请求体完整接收时刻
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp.write(data)
-            wav_path = Path(tmp.name)
+        wav_path = _wav_input(data)
 
         try:
             samples = read_wav_16k_mono(wav_path, cfg.asr_sample_rate)
@@ -502,36 +663,39 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
             return _err(400, "bad_audio_format", msg)
 
         request_timing = TimingRecord()
+        request_timing.audio_start_perf = t0
+        request_timing["audio_origin"] = "batch_processing_start"
         gen = pipeline.run(samples, wav_path, timing=request_timing)
+        owner.bind(gen, request_timing)
         try:
             first_frame = await gen.__anext__()
         except NoSpeechError as e:
             return _err(400, "no_speech", str(e))
-        except (LLMError, TTSError, FrameTooLargeError) as e:
+        except (ASRError, LLMError, TTSError, FrameTooLargeError) as e:
             return _err(502, "upstream_error", str(e))
         except Exception as e:
             logger.exception("stream 首帧前未知异常")
             return _err(502, "upstream_error", str(e))
         finally:
             if wav_path is not None:
-                wav_path.unlink(missing_ok=True)
+                _close_wav_input(wav_path)
                 wav_path = None
 
         first_frame_ready_ms = _ms(t0)
         request_timing["first_frame_ready_ms"] = first_frame_ready_ms
-        llm_stats = getattr(llm, "stats", {}) or {}
-        _tool_seen = bool(llm_stats.get("tool_seen"))
-        _first_content_ms = llm_stats.get("first_content_ms")
-        if _tool_seen and _first_content_ms is not None:
-            tool_ms = (request_timing.get("asr_ms") or 0) + _first_content_ms
-        else:
-            tool_ms = 0
+        tool_ms = request_timing.get("tool_ms") or 0
         timing_header = {
             # Backward-compatible open_ms is the server response-open boundary;
             # firmware first-audio remains a separate device-side measurement.
             "open_ms": first_frame_ready_ms,
             "first_frame_ready_ms": first_frame_ready_ms,
             "asr_ms": request_timing.get("asr_ms"),
+            "comfort_first_ms": request_timing.get("comfort_first_ms"),
+            "answer_first_ms": request_timing.get("answer_first_ms"),
+            "failure_first_ms": request_timing.get("failure_first_ms"),
+            "weather_status": request_timing.get("weather_status"),
+            "audio_origin": request_timing.get("audio_origin"),
+            "answer_open_ms_is_legacy": True,
             "llm_ttft_ms": request_timing.get("llm_ttft_ms"),
             "tts_first_ms": request_timing.get("tts_first_ms"),
             "tool_ms": tool_ms,
@@ -556,10 +720,10 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
                     "total_ms": _ms(t0),
                     **{k: v for k, v in request_timing.items() if v is not None},
                 }, ensure_ascii=False))
-                voice_session_lock.release()
+                await owner.aclose()
 
-        response = StreamingResponse(
-            body(),
+        response = OwnedStreamingResponse(
+            body(), owner=owner,
             media_type="application/octet-stream",
             headers={
                 "Content-Type": "application/octet-stream",
@@ -571,9 +735,9 @@ async def voice_chat_stream(audio: UploadFile = File(...)):
         return response
     finally:
         if wav_path is not None:
-            wav_path.unlink(missing_ok=True)
+            _close_wav_input(wav_path)
         if not handed_to_response:
-            voice_session_lock.release()
+            await owner.aclose()
 
 
 @app.post(
@@ -593,7 +757,11 @@ async def voice_stream(request: Request):
     if not voice_session_lock.try_acquire():
         return _err(409, "device_busy", "语音会话正在处理")
 
+    owner = VoiceStreamOwner(voice_session_lock)
     handed_to_response = False
+    gen = None
+    request_timing = None
+    stream = None
     try:
         t_req = time.perf_counter()
         stream = streaming_asr.create_stream()
@@ -645,28 +813,28 @@ async def voice_stream(request: Request):
             )
 
         t_final = time.perf_counter()
-        text = streaming_asr.final(stream)
+        try:
+            if callable(getattr(streaming_asr, "final_for_request", None)):
+                text = await streaming_asr.final_for_request(stream, request)
+            else:
+                text = streaming_asr.final(stream)
+        except ASRError as e:
+            return _err(502, "upstream_error", str(e))
         asr_ms = _ms(t_req)
         final_decode_ms = _ms(t_final)
-        logger.info("ASR final (%d chars, %d PCM bytes): %s", len(text), pcm_bytes, text[:80])
+        logger.info("ASR final (%d chars, %d PCM bytes)", len(text), pcm_bytes)
         if not text:
-            try:
-                wav = await tts.synthesize("没听清，请再说一次。")
-                frame = encode_frame(wav, cfg.pipeline_max_frame_bytes)
-            except Exception as e:
-                logger.warning("短语音兜底 TTS 失败: %s", e)
-                return _err(400, "no_speech", "流式 ASR 未识别出有效语音")
-            return Response(
-                content=frame,
-                media_type="application/octet-stream",
-                headers={"X-Audio-Framing": "wav-length-prefixed"},
-            )
+            return _err(400, "no_speech", "流式 ASR 未识别出有效语音")
 
         request_timing = TimingRecord()
+        request_timing.audio_start_perf = t_final
+        request_timing["audio_origin"] = "pcm_complete"
         request_timing["asr_ms"] = asr_ms
+        request_timing.captions_enabled = request.headers.get("X-Voice-Captions") == "after-audio-v1"
         gen = pipeline.run_text(text, timing=request_timing)
+        owner.bind(gen, request_timing)
         try:
-            first_frame = await gen.__anext__()
+            first_frame = await first_frame_or_disconnect(gen, request.receive)
         except NoSpeechError as e:
             return _err(400, "no_speech", str(e))
         except (LLMError, TTSError, FrameTooLargeError) as e:
@@ -677,15 +845,18 @@ async def voice_stream(request: Request):
 
         first_frame_ready_ms = _ms(t_final)
         request_timing["first_frame_ready_ms"] = first_frame_ready_ms
-        llm_stats = getattr(llm, "stats", {}) or {}
-        _tool_seen = bool(llm_stats.get("tool_seen"))
-        _first_content_ms = llm_stats.get("first_content_ms")
-        tool_ms = _first_content_ms if (_tool_seen and _first_content_ms is not None) else 0
+        tool_ms = request_timing.get("tool_elapsed_ms") or 0
         timing_header = {
             "open_ms": first_frame_ready_ms,
             "first_frame_ready_ms": first_frame_ready_ms,
             "asr_ms": asr_ms,
             "final_decode_ms": final_decode_ms,
+            "comfort_first_ms": request_timing.get("comfort_first_ms"),
+            "answer_first_ms": request_timing.get("answer_first_ms"),
+            "failure_first_ms": request_timing.get("failure_first_ms"),
+            "weather_status": request_timing.get("weather_status"),
+            "audio_origin": request_timing.get("audio_origin"),
+            "answer_open_ms_is_legacy": True,
             "llm_ttft_ms": request_timing.get("llm_ttft_ms"),
             "tts_first_ms": request_timing.get("tts_first_ms"),
             "tool_ms": tool_ms,
@@ -714,22 +885,24 @@ async def voice_stream(request: Request):
                     "total_ms": _ms(t_req),
                     **{k: v for k, v in request_timing.items() if v is not None},
                 }, ensure_ascii=False))
-                voice_session_lock.release()
+                await owner.aclose()
 
-        response = StreamingResponse(
-            body(),
+        response = OwnedStreamingResponse(
+            body(), owner=owner,
             media_type="application/octet-stream",
             headers={
                 "Content-Type": "application/octet-stream",
-                "X-Audio-Framing": "wav-length-prefixed",
+                "X-Audio-Framing": "wav-caption-after-audio-v1" if request_timing.captions_enabled else "wav-length-prefixed",
                 "X-Timing": json.dumps(timing_header),
             },
         )
         handed_to_response = True
         return response
     finally:
+        if stream is not None and callable(getattr(streaming_asr, "close_stream", None)):
+            streaming_asr.close_stream(stream)
         if not handed_to_response:
-            voice_session_lock.release()
+            await owner.aclose()
 
 
 def _ms(t0: float) -> int:

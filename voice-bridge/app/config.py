@@ -21,6 +21,16 @@ class Config:
     def __init__(self, path: Path):
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         self._data = data or {}
+        v2 = self._data.get('voice_v2', {})
+        self.voice_v2_enabled = v2.get('enabled', False)
+        self.voice_v2_asr_engine = v2.get('asr_engine', 'configured')
+        if self.voice_v2_asr_engine not in ('configured','sensevoice','mimo'):
+            raise ConfigError('invalid voice_v2 ASR engine')
+        if type(self.voice_v2_enabled) is not bool:
+            raise ConfigError('voice_v2 enabled must be boolean')
+        self.voice_v2_limits = {k: v2[k] for k in ('seconds','segments','chars','pending','ttl') if k in v2}
+        from .voice_turn import Limits
+        Limits(**self.voice_v2_limits)
 
         srv = self._data.get("server", {})
         self.server_host = srv.get("host", "0.0.0.0")
@@ -38,6 +48,10 @@ class Config:
             raise ConfigError("DEVICE_AUTH_MODE must be observe or required")
 
         asr = self._data.get("asr", {})
+        self.asr_engine = str(asr.get("engine", "sherpa"))
+        self.asr_mimo_timeout = float(asr.get("mimo_timeout", 15))
+        if self.asr_engine not in {"sherpa", "mimo"}:
+            raise ConfigError("Unsupported ASR engine")
         self.asr_model_dir = BASE_DIR / asr.get("model_dir", "models/sherpa-onnx-sense-voice-zh")
         self.asr_sample_rate = int(asr.get("sample_rate", 16000))
         # v0.4 A2：流式 ASR 模型（zipformer streaming）
@@ -48,8 +62,27 @@ class Config:
 
         tts = self._data.get("tts", {})
         self.tts_primary = tts.get("primary", "edge")
+        self.tts_edge_proxy = tts.get("edge_proxy", "")
+        if not isinstance(self.tts_edge_proxy, str):
+            raise ConfigError("tts.edge_proxy must be an explicit URL or empty direct setting")
+        if self.tts_edge_proxy:
+            from urllib.parse import urlsplit
+            try:
+                edge_proxy = urlsplit(self.tts_edge_proxy)
+                valid_proxy = (edge_proxy.scheme in ("http", "https") and edge_proxy.hostname
+                    and edge_proxy.port and not edge_proxy.username and not edge_proxy.password
+                    and edge_proxy.path in ("", "/") and not edge_proxy.query and not edge_proxy.fragment)
+            except ValueError:
+                valid_proxy = False
+            if not valid_proxy:
+                raise ConfigError("tts.edge_proxy requires an explicit HTTP proxy host and port without credentials")
         self.tts_edge_voice = tts.get("edge_voice", "zh-CN-XiaoxiaoNeural")
+        self.tts_edge_rate = str(tts.get("edge_rate", "+5%"))
+        self.tts_edge_pitch = str(tts.get("edge_pitch", "+3Hz"))
         self.tts_edge_probe_timeout = float(tts.get("edge_probe_timeout", 3))
+        self.tts_mimo_voice = str(tts.get("mimo_voice", "茉莉"))
+        self.tts_mimo_timeout = float(tts.get("mimo_timeout", 15))
+        self.tts_probe_timeout = float(tts.get("probe_timeout", self.tts_edge_probe_timeout if self.tts_primary == "edge" else 15))
         self.tts_probe_interval_s = int(tts.get("probe_interval_s", 300))  # 需求1：周期探活间隔
 
         vad = self._data.get("vad", {})
@@ -87,13 +120,31 @@ class Config:
             self.pipeline_ack_query = [str(s) for s in ack_cfg]
 
         llm = self._data.get("llm", {})
+        self.llm_engine = str(llm.get("engine", "hermes"))
+        if self.llm_engine not in {"hermes", "mimo", "deepseek"}:
+            raise ConfigError("Unsupported LLM engine")
         # 慢路径 = Hermes API Server（v0.3 起）
         self.llm_api_server_url = llm.get("api_server_url", "http://127.0.0.1:8780/v1")
         self.llm_model = llm.get("model", "hermes-agent")
         self.llm_api_key_env = llm.get("api_key_env", "HERMES_API_KEY")
 
         # 轻量通道 = DeepSeek 裸模型（长期 RAG，A1 修订「分路」）
+        weather = self._data.get("weather_fast_path", {})
+        self.weather_enabled = weather.get("enabled", False)
+        self.weather_cities = weather.get("cities", ["新加坡", "北京", "上海"])
+        if type(self.weather_enabled) is not bool:
+            raise ConfigError("weather_fast_path.enabled must be boolean")
+        if (not isinstance(self.weather_cities, list) or not self.weather_cities
+                or any(city not in {"新加坡", "北京", "上海"} for city in self.weather_cities)):
+            raise ConfigError("weather_fast_path cities must be supported explicit names")
         lw = self._data.get("lightweight", {})
+        self.lw_engine = str(lw.get("engine", "deepseek"))
+        if self.lw_engine not in {"deepseek", "mimo"}:
+            raise ConfigError("Unsupported lightweight engine")
+        if (self.llm_engine == "mimo") != (self.lw_engine == "mimo"):
+            raise ConfigError("MiMo trial requires both LLM paths to select mimo")
+        if self.llm_engine == "deepseek" and self.lw_engine != "deepseek":
+            raise ConfigError("DeepSeek trial requires both LLM paths to select deepseek")
         self.lw_base_url = lw.get("base_url", "https://api.deepseek.com")
         self.lw_model = lw.get("model", "deepseek-chat")
         self.lw_api_key_env = lw.get("api_key_env", "DEEPSEEK_API_KEY")
