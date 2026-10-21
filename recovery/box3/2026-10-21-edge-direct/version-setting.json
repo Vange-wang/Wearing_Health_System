@@ -1,0 +1,14 @@
+{
+  "field": "tts.edge_proxy",
+  "before": "http://127.0.0.1:7800",
+  "after": "",
+  "config_before_sha256": "d600a029938f8830e3101152aa0f14cc6818ac6b95c92653ae848ee35e066e86",
+  "config_after_sha256": "477b7ccacb0998354cff9982454fc1d903abc185b2cedf1fe0a994400ba6add8",
+  "user_authorized": true,
+  "other_configuration_fields_changed": false,
+  "credentials_copied": false,
+  "firmware_flash": false,
+  "state": "TEMPORARY_DIRECT_ROUTE_HUMAN_PENDING",
+  "source_baseline_git": "446d5bc974ccff001ab34ac5ae9626c7828e6784",
+  "at_unix_s": 1792548035.0182557
+}
