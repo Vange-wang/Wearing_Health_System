@@ -1,0 +1,627 @@
+"""LLM 抽象接口 + 双后端（长期 RAG，Spec A1 修订「分路」）。
+
+- 慢路径 = Hermes API Server（OpenAI 兼容），voice-bridge 只负责「听/说」，
+  「想」交给 Hermes（与微信共用同一 profile 的 persistent memory + skills）。
+- 轻量通道 = DeepSeek 裸模型 + USER.md 注入（纯闲聊/简单问答，~1.5s）。
+
+流式细节（Spec §4 / §9 风险表）：
+- Hermes agent 可能先跑工具（SSE 里只有工具指示、无正文），最后才流式出答案。
+  stream_chat() 过滤工具指示事件（tool_calls delta），只产出正文文本；
+  同时在 self.stats 记录 first_chunk_ms / first_content_ms / tool_seen，
+  供 pipeline 做「工具期 / 答案期」分段计量。
+- 直连：trust_env=False，不信任环境代理（与 v0.1/v0.2 一致）。
+"""
+import logging
+import re
+import threading
+import time
+from abc import ABC, abstractmethod
+from collections import deque
+from pathlib import Path
+from .http_stream_transport import cancellable_transport
+
+logger = logging.getLogger("voice-bridge.llm")
+
+# ISSUE-0008：轻量通道多轮上下文（指代消解）。
+# 轻量通道每轮独立 messages 导致「A城市天气 → B城市呢」无法理解指代，
+# 此处维护一个滑动窗口会话历史（最近 N 轮），并设置无交互过期避免久远串上下文。
+HISTORY_MAX_MESSAGES = 8   # 最近 4 轮（4 user + 4 assistant）
+SESSION_TTL_SECONDS = 600  # 10 分钟无交互则清空历史
+
+# 方案1（延迟优化）：DeepSeek 连接保温。A7 只在启动预热一次，长时间无请求后
+# TLS 连接被 DeepSeek 服务端回收，首请求付冷连接 ~1.4s（热连接仅 ~0.6s）。
+# 周期心跳（max_tokens=1 最小请求）保持连接热，llm_ttft 稳定 ~500ms。
+HEARTBEAT_INTERVAL_SECONDS = 240  # 每 4 分钟一次（< TLS 空闲超时，保守）
+
+# 仅这些已接入实测字段的问题允许读取轻量健康上下文；普通闲聊不触发提供器。
+HEALTH_CONTEXT_TERMS = ("心率", "心跳", "血氧")
+
+# 慢路径哨兵：SSE 首次出现工具调用时，stream_chat 产出此对象一次，
+# 供 pipeline 触发「安抚语第一帧」（A5）。不进分句器，不污染正文。
+TOOL_SENTINEL = object()
+
+
+class ConversationHistory:
+    """快、慢 LLM 共用的有界进程内连续会话窗口。"""
+
+    def __init__(
+        self,
+        max_messages: int = HISTORY_MAX_MESSAGES,
+        ttl_seconds: float = SESSION_TTL_SECONDS,
+    ):
+        self._messages: deque = deque(maxlen=max_messages)
+        self._lock = threading.Lock()
+        self._last_active = time.time()
+        self._ttl_seconds = float(ttl_seconds)
+
+    def snapshot(self) -> list[dict]:
+        now = time.time()
+        with self._lock:
+            if now - self._last_active > self._ttl_seconds:
+                self._messages.clear()
+            messages = list(self._messages)
+            self._last_active = now
+        return messages
+
+    def remember(self, user_text: str, assistant_text: str) -> None:
+        assistant_text = (assistant_text or "").strip()
+        if not assistant_text:
+            return
+        with self._lock:
+            self._messages.append({"role": "user", "content": user_text})
+            self._messages.append({"role": "assistant", "content": assistant_text})
+            self._last_active = time.time()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._messages.clear()
+
+# 人设 + 情感化系统提示词（Hermes 起草，参照小智默认人设；轻量通道与慢路径共用基调）
+SYSTEM_PROMPT = """你是喵喵同学，一个聪明友善、活泼亲切的健康助手，陪伴用户的可穿戴健康设备。
+
+说话风格：
+- 第一句直接回答，不复述问题，不说客套话。
+- 日常聊天像真人朋友一样自然轻快；可用“呀、啦、诶”等，但每次最多一个轻语气词，不连续堆叠，不强行幽默。
+- 回答以 1~2 句为主，简短、口语化、适合语音朗读，不用书面腔、机器人腔或客服腔。
+- 语义转折或话题切换时用句号、问号或叹号断开，禁止整段一逗到底。
+
+功能约束：
+- 健康数据分两类：心率、血氧已接入真实监测（用户问「心率/血氧多少」会直接报实测值，不由你回答）；睡眠等其他健康数据尚未接入，被问到时诚实说「这个功能还在准备中，接入后就能帮你看了」，不要编造数据。
+- 实时数据（天气、快递、新闻、股票、路况等）你无法联网查询时，诚实说「这个我暂时查不了，需要联网搜索」，禁止编造具体数值。
+- 不主动编造任何具体数据或事实。
+- 不主动自我介绍，直接回答用户问题；除非用户明确问「你是谁/你叫什么名字」。"""
+
+HEALTH_SYSTEM_POLICY = """本轮涉及健康字段，以下更具体规则优先：
+- 心率、血氧已接入真实监测。若系统上下文提供“当前健康数据”，只能引用其中的新鲜实测值；若未提供或数据已过期，如实说明暂无最新数据，不得猜测或编造数值。
+- 用户询问正常范围、原因、方法、关系、选购等健康知识时，正常回答知识问题，可结合已提供的新鲜数据，但不得把知识回答偷换成单纯报数。
+- 血压、睡眠等未接入字段被问到当前实测值时，诚实说明尚未接入。
+- 健康与异常内容禁止卖萌、开玩笑、使用波浪号或夸张感叹；异常和就医提示必须直接清晰，不得弱化风险或拖延联系家人、就医。"""
+
+
+class LLMError(Exception):
+    """LLM 阶段错误基类。"""
+
+
+class LLMConfigError(LLMError):
+    """配置缺失（如 API_SERVER_KEY）→ 500 config_error。"""
+
+
+class LLMBase(ABC):
+    name: str = "unknown"
+
+    @abstractmethod
+    def chat(self, user_text: str) -> str:
+        """用户文本 → 回复文本（非流式，v0.1 路径保留）。"""
+
+    @abstractmethod
+    def stream_chat(self, user_text: str):
+        """用户文本 → 正文增量迭代器（Iterator[str]，工具指示已过滤）。"""
+
+    def close(self) -> None:
+        """Release reusable network resources; fake/local backends may no-op."""
+
+
+class HermesLLM(LLMBase):
+    """Hermes API Server 后端（OpenAI 兼容 /v1/chat/completions）。"""
+
+    name = "hermes"
+
+    def __init__(
+        self,
+        api_key: str | None,
+        base_url: str,
+        model: str,
+        conversation_history: ConversationHistory | None = None,
+    ):
+        if not api_key:
+            raise LLMConfigError(
+                "Hermes API Server key 未配置（环境变量/ .env，需先在 Hermes 侧 "
+                "hermes config set API_SERVER_ENABLED true + API_SERVER_KEY）"
+            )
+        try:
+            import httpx
+            from openai import OpenAI
+        except ImportError as e:
+            raise LLMConfigError(f"openai/httpx 未安装: {e}") from e
+        # trust_env=False：不信任 HTTPS_PROXY 等环境变量，本机直连（Spec §3）
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=httpx.Client(trust_env=False, timeout=60.0, transport=cancellable_transport()),
+        )
+        self._stream_client = httpx.Client(trust_env=False, timeout=180.0, transport=cancellable_transport())
+        self.model = model
+        self.conversation_history = conversation_history or ConversationHistory()
+        # 分段计量（每次 stream_chat 重置）：tool_seen / first_chunk_ms / first_content_ms
+        self.stats: dict = {}
+        logger.info("Hermes client ready: %s @ %s", model, base_url)
+
+    def chat(self, user_text: str) -> str:
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=self._get_messages(user_text),
+                stream=False,  # v0.1 非流式路径保留
+            )
+        except Exception as e:
+            raise LLMError(f"Hermes 调用失败: {e}") from e
+        text = (resp.choices[0].message.content or "").strip()
+        self.conversation_history.remember(user_text, text)
+        logger.info("LLM reply (%d chars): %s", len(text), text[:80])
+        return text
+
+    def _get_messages(self, user_text: str) -> list[dict]:
+        return (
+            [{"role": "system", "content": SYSTEM_PROMPT}]
+            + self.conversation_history.snapshot()
+            + [{"role": "user", "content": user_text}]
+        )
+
+    def stream_chat(self, user_text: str):
+        """流式：产出正文增量；工具调用只标记、不透出。
+
+        Hermes API Server 的 `/v1/chat/completions` 是**真 agent（跑工具循环）**，
+        但响应体 `tool_calls` 字段天然为空——工具调用通过 SSE 的
+        `event: hermes.tool.progress` 事件暴露（见查证结论：纯聊天透传是误判）。
+        故此处用 httpx 直读 SSE，监听该事件判 tool_seen。
+
+        self.stats 在流结束后可读：
+        - first_chunk_ms：首个 SSE chunk 到达（相对流开始）
+        - first_content_ms：首个正文 delta 到达（无正文=工具期长度近似）
+        - tool_seen：是否出现工具调用（hermes.tool.progress 事件或 tool_calls delta）
+        """
+        import json
+
+        import httpx
+
+        stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        self.stats = stats
+        t0 = time.perf_counter()
+        url = f"{self._base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+        body = {
+            "model": self.model,
+            "messages": self._get_messages(user_text),
+            "stream": True,
+        }
+        resp = None
+        try:
+            req = self._stream_client.build_request("POST", url, json=body, headers=headers)
+            resp = self._stream_client.send(req, stream=True)
+            resp.raise_for_status()
+        except Exception as e:
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+            raise LLMError(f"Hermes 流式调用失败: {e}") from e
+
+        collected: list[str] = []
+
+        def _iter():
+            sentinel_sent = False
+            try:
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    # 非标准事件：hermes.tool.progress → 工具调用（真 agent 工具循环）
+                    if line.startswith("event:"):
+                        ev = line[6:].strip()
+                        if ev == "hermes.tool.progress":
+                            stats["tool_seen"] = True
+                            if not sentinel_sent:
+                                sentinel_sent = True
+                                yield TOOL_SENTINEL
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    d = line[5:].strip()
+                    if not d or d == "[DONE]":
+                        continue
+                    if stats["first_chunk_ms"] is None:
+                        stats["first_chunk_ms"] = round((time.perf_counter() - t0) * 1000)
+                    try:
+                        obj = json.loads(d)
+                    except Exception:
+                        continue
+                    if "choices" not in obj:
+                        continue
+                    delta = obj["choices"][0].get("delta") or {}
+                    # 标准 tool_calls delta（若 Hermes 某些场景透出）
+                    if delta.get("tool_calls"):
+                        stats["tool_seen"] = True
+                        if not sentinel_sent:
+                            sentinel_sent = True
+                            yield TOOL_SENTINEL
+                        continue
+                    content = delta.get("content")
+                    if content:
+                        if stats["first_content_ms"] is None:
+                            stats["first_content_ms"] = round((time.perf_counter() - t0) * 1000)
+                        collected.append(content)
+                        yield content
+            except Exception as e:
+                raise LLMError(f"Hermes 流式读取失败: {e}") from e
+        from .stream_resources import OwnedSyncStream
+        return OwnedSyncStream(_iter(), resp, stats, lambda:
+            self.conversation_history.remember(user_text, "".join(collected)))
+
+    def close(self) -> None:
+        """Close both the OpenAI client and the reused raw-SSE client."""
+        try:
+            self.client.close()
+        finally:
+            self._stream_client.close()
+
+
+def load_user_profile(path) -> tuple[str, bool]:
+    """只读 Hermes USER.md（用户画像，裁决①：只注入 USER.md，不读 MEMORY.md）。
+
+    返回 (内容, 是否成功)。文件不存在/读取失败 → ("", False)。
+    """
+    try:
+        p = Path(path)
+        if not p.exists():
+            return "", False
+        return p.read_text(encoding="utf-8").strip(), True
+    except Exception:
+        return "", False
+
+
+class LightweightLLM(LLMBase):
+    """轻量通道（长期 RAG A1 修订「分路」）：DeepSeek 裸模型 + USER.md 注入。
+
+    - 直连 DeepSeek（trust_env=False），无工具、无 skills → ~1.5s 开口。
+    - 每次请求读 Hermes USER.md 注入 system prompt（共用记忆；红线：必须注入）。
+    - USER.md 读取失败 → 抛 LLMError（由 pipeline 降级慢路径），不退回无记忆裸聊。
+    """
+
+    name = "deepseek"
+
+    def __init__(
+        self,
+        api_key: str | None,
+        base_url: str,
+        model: str,
+        user_profile_path,
+        memory_store=None,
+        conversation_history: ConversationHistory | None = None,
+    ):
+        if not api_key:
+            raise LLMConfigError(
+                "轻量通道 DeepSeek key 未配置（环境变量/ .env）"
+            )
+        try:
+            import httpx
+            from openai import OpenAI
+        except ImportError as e:
+            raise LLMConfigError(f"openai/httpx 未安装: {e}") from e
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=httpx.Client(trust_env=False, timeout=60.0, transport=cancellable_transport()),
+        )
+        self.model = model
+        self.user_profile_path = user_profile_path
+        self.memory = memory_store  # 单一记忆源：MemoryClient（可选）
+        self._health_context_provider = None
+        self.stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        # ISSUE-0008 + 真人测试修复：单 BOX-3 的快、慢路径共享同一窗口。
+        self.conversation_history = conversation_history or ConversationHistory()
+        # 保留旧测试/诊断只读入口；真实读写统一由 ConversationHistory 负责。
+        self._history = self.conversation_history._messages
+        self._history_lock = self.conversation_history._lock
+        # 方案1：心跳保温线程（保持 DeepSeek TLS 连接热）
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
+        logger.info("Lightweight(%s) ready: %s @ %s", self.name, model, base_url)
+
+    def set_health_context_provider(self, provider) -> None:
+        """绑定只读健康上下文提供器；由 Pipeline 注入，不访问网络。"""
+        self._health_context_provider = provider
+
+    @property
+    def _last_active(self) -> float:
+        return self.conversation_history._last_active
+
+    @_last_active.setter
+    def _last_active(self, value: float) -> None:
+        self.conversation_history._last_active = float(value)
+
+    def _system_prompt(self, user_text: str = "") -> str:
+        profile, ok = load_user_profile(self.user_profile_path)
+        if not ok:
+            raise LLMError("USER.md 读取失败（轻量通道共用记忆无法注入）")
+        prompt = (
+            SYSTEM_PROMPT
+            + "\n\n以下是用户的长期画像与偏好（来自共享记忆），回复时自然贴合：\n"
+            + profile
+        )
+        # 单一记忆源（v2）：追加 Hermes MEMORY.md 最近窗口（本地读，零网络；缺失/为空静默跳过）
+        if self.memory is not None:
+            facts = self.memory.load_recent()
+            if facts:
+                prompt += "\n\n以下是用户长期记忆（事实）：\n" + facts
+        if any(term in user_text for term in HEALTH_CONTEXT_TERMS):
+            prompt += "\n\n" + HEALTH_SYSTEM_POLICY
+            if self._health_context_provider is not None:
+                context = self._health_context_provider()
+                if context:
+                    prompt += "\n\n" + context
+        return prompt
+
+    def _get_messages(self, user_text: str) -> list[dict]:
+        """构造带历史的 messages（ISSUE-0008）：system + 最近 N 轮历史 + 当前 user。
+
+        超过 SESSION_TTL_SECONDS 无交互则清空历史，避免久远对话串上下文。
+        """
+        system = self._system_prompt(user_text)
+        history = self.conversation_history.snapshot()
+        return [{"role": "system", "content": system}] + history + [{"role": "user", "content": user_text}]
+
+    def _remember(self, user_text: str, assistant_text: str) -> None:
+        """把一轮对话（user + assistant）追加进历史（ISSUE-0008）。"""
+        self.conversation_history.remember(user_text, assistant_text)
+
+    def clear_history(self) -> None:
+        """清空会话历史（测试/手动重置用）。"""
+        self.conversation_history.clear()
+
+    def chat(self, user_text: str) -> str:
+        try:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=self._get_messages(user_text),
+                stream=False,
+            )
+        except LLMError:
+            raise
+        except Exception as e:
+            raise LLMError(f"DeepSeek 调用失败: {e}") from e
+        text = (resp.choices[0].message.content or "").strip()
+        self._remember(user_text, text)
+        return text
+
+    def stream_chat(self, user_text: str):
+        t0 = time.perf_counter()
+        stats = {"tool_seen": False, "first_chunk_ms": None, "first_content_ms": None}
+        self.stats = stats
+        try:
+            messages = self._get_messages(user_text)
+        except LLMError:
+            raise
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=True,
+            )
+        except Exception as e:
+            raise LLMError(f"DeepSeek 流式调用失败: {e}") from e
+
+        collected: list[str] = []
+
+        def _iter():
+            try:
+                for chunk in stream:
+                    if stats["first_chunk_ms"] is None:
+                        stats["first_chunk_ms"] = round((time.perf_counter() - t0) * 1000)
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if delta is None:
+                        continue
+                    content = getattr(delta, "content", None)
+                    if content:
+                        if stats["first_content_ms"] is None:
+                            stats["first_content_ms"] = round((time.perf_counter() - t0) * 1000)
+                        collected.append(content)
+                        yield content
+            except Exception as e:
+                raise LLMError(f"DeepSeek 流式读取失败: {e}") from e
+        from .stream_resources import OwnedSyncStream
+        return OwnedSyncStream(_iter(), stream, stats, lambda:
+            self._remember(user_text, "".join(collected)))
+
+    def extract_memory_async(self, user_text: str, assistant_text: str) -> None:
+        """需求3（改造）：后台线程提取长期记忆（全自动，每轮必做）。
+
+        回复完成后由 pipeline 统一调用，不阻塞回复、失败静默。轻量/RAG 路由走此路径；
+        Hermes 慢路径自带 persistent memory（豁免，见 pipeline 判定）。
+        """
+        if self.memory is None:
+            return
+        threading.Thread(
+            target=self._extract_memory_sync,
+            args=(user_text, assistant_text),
+            daemon=True,
+        ).start()
+
+    def _extract_memory_sync(self, user_text: str, assistant_text: str) -> None:
+        """后台调 DeepSeek 提取本轮对话中的个人信息，写入/删除共享记忆（memory_server）。
+
+        输出约定（配合字段级删除）：
+        - `NONE` 无信息；
+        - `REMEMBER: <类别>: <属性>: <值>` 结构化属性（如「身体: 身高: 175cm」），
+          fact 落盘为 `属性: 值`、关键词 = 属性名 + 值；
+        - 无法拆成属性-值的叙述性事实（如「用户是广东医科大学的学生」）→
+          `REMEMBER: <类别>: <事实>` 整句（memory_server 对无属性结构走整段删除兜底）；
+        - `FORGET: <关键词>` 每行一条（用户明确要求遗忘 → 按关键词删除）。
+        失败静默（不影响回复），重试 1 次。
+        """
+        prompt = (
+            "从下面的对话里，找出用户透露的、值得长期记住的个人信息（姓名、称呼、偏好、家庭、身体、地址、物品等）。\n"
+            "只记录用户亲口说的事实，不要把助手（喵喵同学）的提问或猜测当成用户事实。\n"
+            "如果用户明确要求忘记某条信息（例如「忘掉我的身高」），输出一行 FORGET: <属性名>，不要为它输出 REMEMBER。\n"
+            "没有值得记录的信息就只输出 NONE。\n"
+            "有值得记录的信息时，优先输出结构化「属性: 值」形态，每行：REMEMBER: <类别>: <属性>: <值>\n"
+            "例如「我的身高是175cm」→ REMEMBER: 身体: 身高: 175cm；「单车是FACTOR OSTRO VAM」→ REMEMBER: 物品: 单车: FACTOR OSTRO VAM\n"
+            "属性名要简短（≤20字，如 身高/体重/单车/英文名/学校）；值要具体。\n"
+            "如果事实无法拆成属性-值（叙述性，如「用户是广东医科大学的学生」），则输出整句：REMEMBER: <类别>: <事实>。\n"
+            "同一轮多个属性各占一行。\n\n"
+            f"用户：{user_text}\n喵喵同学：{assistant_text}"
+        )
+        for attempt in range(getattr(self, "memory_extract_attempts", 2)):
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                    temperature=0,
+                )
+                content = (resp.choices[0].message.content or "").strip()
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line.upper() == "NONE":
+                        break
+                    # 遗忘指令：按关键词删除对应记忆
+                    fm = re.match(r"FORGET\s*[:：]\s*(.+)", line, re.IGNORECASE)
+                    if fm:
+                        removed = self.memory.remove_by_keyword(fm.group(1).strip())
+                        if removed:
+                            logger.info("记忆后台删除已确认 removed=%d", removed)
+                        continue
+                    # 结构化属性：REMEMBER: 类别: 属性: 值
+                    m = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
+                    if m:
+                        category = m.group(1).strip()
+                        attr = m.group(2).strip()
+                        value = m.group(3).strip()
+                        fact = f"{attr}: {value}"
+                        kws = [attr, value]
+                        added = self.memory.add_fact(category, fact, kws)
+                        if added:
+                            logger.info("记忆后台提交已确认")
+                        else:
+                            logger.info("记忆后台提交未确认")
+                        continue
+                    # 叙述性事实（无属性结构）：REMEMBER: 类别: 事实
+                    m2 = re.match(r"REMEMBER\s*[:：]\s*([^:：]+)[:：]\s*(.+)", line, re.IGNORECASE)
+                    if m2:
+                        category = m2.group(1).strip()
+                        fact = m2.group(2).strip()
+                        added = self.memory.add_fact(category, fact, None)
+                        if added:
+                            logger.info("记忆后台提交已确认")
+                return
+            except Exception as e:
+                logger.warning("记忆后台提取失败 attempt=%d category=%s", attempt + 1, type(e).__name__)
+                time.sleep(0.5)
+
+    def warmup(self) -> None:
+        """A7 启动预热：发最小请求（max_tokens=1），预热 TLS 连接 + 首 token。
+
+        把「拨号 + 叫醒」的一次性冷启动成本花在服务启动时刻，
+        首次按键即热连接（省 ~2s）。同步阻塞，调用方放后台线程。
+        """
+        try:
+            self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": "你好"}],
+                max_tokens=1,
+                stream=False,
+            )
+            logger.info("DeepSeek 预热完成（连接 + 首 token 就绪）")
+        except Exception as e:
+            logger.warning("DeepSeek 预热失败（首次请求付冷启动，不影响服务）: %s", e)
+
+    def start_heartbeat(self, interval: float = HEARTBEAT_INTERVAL_SECONDS) -> None:
+        """方案1：启动周期心跳（后台守护线程），保持 DeepSeek TLS 连接热。
+
+        消除「长时间无请求 → 连接被服务端回收 → 首请求付冷连接 ~1.4s」的尖峰。
+        """
+        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+            return
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(interval,),
+            daemon=True,
+            name="deepseek-heartbeat",
+        )
+        self._heartbeat_thread.start()
+        logger.info("DeepSeek 心跳保温启动（每 %ds 一次）", interval)
+
+    def stop_heartbeat(self) -> None:
+        """停止心跳（服务关闭时调用）。"""
+        self._heartbeat_stop.set()
+
+    def close(self) -> None:
+        self.stop_heartbeat()
+        self.client.close()
+
+    def _heartbeat_loop(self, interval: float) -> None:
+        while not self._heartbeat_stop.is_set():
+            self._heartbeat_stop.wait(interval)
+            if self._heartbeat_stop.is_set():
+                break
+            try:
+                self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": "你好"}],
+                    max_tokens=1,
+                    stream=False,
+                )
+                logger.debug("DeepSeek 心跳保温 OK")
+            except Exception as e:
+                logger.debug("DeepSeek 心跳失败（下次重试）: %s", e)
+
+
+def create_llm(cfg, conversation_history: ConversationHistory | None = None) -> LLMBase:
+    """工厂：慢路径 = Hermes 后端。"""
+    if getattr(cfg, "llm_engine", "hermes") == "mimo":
+        from .mimo_llm import MiMoLLM
+        return MiMoLLM(cfg.user_profile_path, conversation_history=conversation_history)
+    if getattr(cfg, "llm_engine", "hermes") == "deepseek":
+        return create_lightweight_llm(cfg, conversation_history=conversation_history)
+    return HermesLLM(
+        cfg.llm_api_key(), cfg.llm_api_server_url, cfg.llm_model,
+        conversation_history=conversation_history,
+    )
+
+
+def create_lightweight_llm(
+    cfg,
+    memory_store=None,
+    conversation_history: ConversationHistory | None = None,
+) -> LLMBase:
+    """工厂：轻量通道 = DeepSeek 裸模型 + USER.md 注入 +（可选）语音长期记忆。"""
+    if getattr(cfg, "lw_engine", "deepseek") == "mimo":
+        from .mimo_llm import MiMoLLM
+        return MiMoLLM(cfg.user_profile_path, memory_store=memory_store, conversation_history=conversation_history)
+    if (getattr(cfg, "lw_engine", None) == "deepseek"
+            or getattr(cfg, "llm_engine", "hermes") == "deepseek"):
+        from .mimo_llm import DeepSeekVoiceLLM
+        return DeepSeekVoiceLLM(
+            cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path,
+            memory_store=memory_store, conversation_history=conversation_history,
+            tool_route_configured=getattr(cfg, "llm_engine", "hermes") == "hermes",
+        )
+    return LightweightLLM(
+        cfg.lightweight_api_key(), cfg.lw_base_url, cfg.lw_model, cfg.user_profile_path,
+        memory_store=memory_store,
+        conversation_history=conversation_history,
+    )

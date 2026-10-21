@@ -1,0 +1,529 @@
+{
+  "state": "KNOWN_FAILING_BASELINE_NOT_ACCEPTED_RELEASE",
+  "date": "2026-10-21",
+  "scope": "PC app Python source, SDK stage main source, saved normal R20 and installed diagnostic app binaries; external SDK/components remain referenced by input map. Configuration secrets/NVS/models/audio are excluded. This is not a verified complete build release.",
+  "human_result": "wake ACK heard, no answer",
+  "PC_instance_sha256": "c2087e53b64c347f54a338e16500423c0e51d56ff1f3c7fd2ab3c19636478ba5",
+  "files": [
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/__init__.py",
+      "sha256": "a3f711b247007afc3521f66ce0ed5336ea975e7ff8fb617e6e5d55c3056c9342",
+      "bytes": 32
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/alert_outbox.py",
+      "sha256": "fce1ca2da9fb496ab0383acf1ea1585fbb5beb2c99b3a6fedaecfa57abe7b5bf",
+      "bytes": 9756
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/asr.py",
+      "sha256": "ca83c6c7f41c41602395c6a3b55a0b74575b92a0b9f6e387a7abf91516dc125d",
+      "bytes": 7495
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/audio_input.py",
+      "sha256": "fafed1274b18161551cc669fe8b863f0b914c9820f45a8d9f3dd91f4d01ccca0",
+      "bytes": 4361
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/caption_protocol.py",
+      "sha256": "66e7df55f94f35a63c6039c9af431df082a15bea74dda4015a49344f2ecbfd01",
+      "bytes": 889
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/config.py",
+      "sha256": "e83b757523232548d3d6b63cb10cafbf5a425078d07dfb41082ecd4aa1956cd0",
+      "bytes": 13027
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/device_auth.py",
+      "sha256": "ac32fececfceb45002ac06935076e10db2123d9bfe6f83d42dbaa4696822c2af",
+      "bytes": 2081
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/discovery_protocol.py",
+      "sha256": "efb596a7dc24b62d1c67e35e8caabe666dc6dbc45747d2b160f215dcd612f099",
+      "bytes": 3456
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/discovery_runtime.py",
+      "sha256": "15afb41d616676d82b69703628b8f39ca53f9085d8a3dbd9cec3fc4e8c89c45b",
+      "bytes": 5748
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/discovery_udp.py",
+      "sha256": "43d5580002d80c9193e8d540ea005de71171921ba8ea8c1868c0f6786a310998",
+      "bytes": 7718
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/edge_connection.py",
+      "sha256": "e18c8b0a843fa8ce28b905eba855bea63320655292ede4955675008de3e5b0f0",
+      "bytes": 2027
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/first_frame.py",
+      "sha256": "eb98c832bd4f93310e83e19b1e9b2983ba14e3cf7e7638cf14b85dd17fca675d",
+      "bytes": 1115
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/health.py",
+      "sha256": "2a3da2e0768827e188a7b08929d3be5ba6acdd343ed3fc2b725c02978e38e8a2",
+      "bytes": 15420
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/health_compat.py",
+      "sha256": "a12bea9416d6f42f7aca9618e30a5b04bf9c94c994ce660c7631cfebe3656c7c",
+      "bytes": 1296
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/http_stream_transport.py",
+      "sha256": "f144b887cc0f437d1f4bd608d82c686701f45cfbf35f033b71be2c20010e277a",
+      "bytes": 6619
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/input_qualification.py",
+      "sha256": "1b0f72876f577533fbcaf70d1377692e6885815ca68b3f1f9a129b359e14d0df",
+      "bytes": 353
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/knowledge.py",
+      "sha256": "683676e05d63c6ae6c357b8d929363cf5ccd5d38ec019f272584befd327af7fb",
+      "bytes": 2455
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/llm.py",
+      "sha256": "fb402abc53a08f1294996a28a3f78c4ba550a464ace8eee6ea9cafe716c0b14f",
+      "bytes": 30065
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/main.py",
+      "sha256": "4b7c7f318891e1c3c9c6bbf40b93723372e0470f223c299cf70d99eb37c332ef",
+      "bytes": 37431
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/memory.py",
+      "sha256": "49d5eae2fd9fabe5c420d4042e9abf39293fed02a40144478e6f2ac9cceed94a",
+      "bytes": 8612
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/mimo_asr.py",
+      "sha256": "6296db0b56e9f32b1933c3e308a180966534b3b2d5ab86c99bc0537b342e7466",
+      "bytes": 7711
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/mimo_llm.py",
+      "sha256": "67c5b4f7e1f704070814b84eaa8b436a5fbdd916c028b13c576dbac63cc04b47",
+      "bytes": 8200
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/mimo_tts.py",
+      "sha256": "c1ecbac0e052bcfdefe05416aec6dc9b31fa79f506f9f26a2d994a2f3d479aba",
+      "bytes": 6765
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/pipeline.py",
+      "sha256": "1cfa5ee865764bcefb7f2c273f407fdf53a4b8032ccb15666b02fcecdac6312e",
+      "bytes": 42591
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/rag.py",
+      "sha256": "40e8756fa154dc3becc6b90d399b6405edc78ef92928a649c8e5ee6f8bdc6c40",
+      "bytes": 2444
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/response_owner.py",
+      "sha256": "e0216d3a9591e1aa27623bc487a6284e5b549641e6c3b6405e39f6024bc6afa1",
+      "bytes": 2031
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/router.py",
+      "sha256": "c8f5bb0c6e0d62d5bbed5ba97d48efe4cb98fc878a1d0eef09b1c884651f930c",
+      "bytes": 12285
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/schemas.py",
+      "sha256": "20cfcef773b4c99c58a6a774ad677647dc33df40081f8ec7d7b0bd2bdc9e4050",
+      "bytes": 3553
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/splitter.py",
+      "sha256": "09e1d61d9bbf86dda49ce3f94f517081823457efa9b41d04c0e744cbf38dbc70",
+      "bytes": 5822
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/stream_resources.py",
+      "sha256": "3b92623a3c17c78cfee7f73bddbf441271064243c5740bbd7f5e74840cdab4c2",
+      "bytes": 9732
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/tts.py",
+      "sha256": "0beb0f5caf026b6fcb61d18ae74e3d97d930f17fe2c3e6ac981ba8d0b3a4b279",
+      "bytes": 24256
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/turn_asr.py",
+      "sha256": "1e5b8398a9165eb691a4ebebc08388a7c8bdc411b94bacf6f50e03147f91e1a4",
+      "bytes": 2403
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/tx_audio_quantity.py",
+      "sha256": "d6027dd3c1293b875fafc957403c5da731a75352cdfb02b1afa31c38401cc116",
+      "bytes": 1111
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/tx_completion.py",
+      "sha256": "79f85a4b7caa36d2df2d7015fd1eda5402f254540ac661a2bd468a5f5c1e01e4",
+      "bytes": 1513
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/vad.py",
+      "sha256": "d0c1767ef4ec2e9d337d02d231f6e0304c213cac02841b3e63d231dc2ae8ef22",
+      "bytes": 2053
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/voice_turn.py",
+      "sha256": "551f5fcb921840776bc84948894d1fb09d14f09d9594ac01419ac612490f0836",
+      "bytes": 16427
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/voice_v2.py",
+      "sha256": "123d498a9d5989c80f258b014a38311c7b7b22c6d9fdda0b766f04a3d3855d15",
+      "bytes": 13069
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/voice_v2_health.py",
+      "sha256": "8311b31293855007d4b94fdcd71a66e10ec084ae6d4fae35aa56aea3a5b9d49f",
+      "bytes": 1728
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/voice_v2_service.py",
+      "sha256": "148f01cd94cadf4dba65c842059486a37cb39d63b319fa589d6926c66518a558",
+      "bytes": 6730
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/weather.py",
+      "sha256": "0d9aa030c55b0144cce5be95b249141734c0ac90616ccbb8d33ab6587eb93e91",
+      "bytes": 11497
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/weather_credential.py",
+      "sha256": "8365913dbc1fcb3f855cb47a9460e7183455bfa9bf3a5cd2931af1c7b7a7a3bf",
+      "bytes": 940
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/weather_dns.py",
+      "sha256": "1dfd1d94e448a07a26122b4e71c4ad88fbaedfe1d363fedf01a19c5aeb05c69f",
+      "bytes": 6030
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/weather_intent.py",
+      "sha256": "9aabc286c1af76ff989cce3cac87d06cae4339edbc6835ca5d7a65420f2d3519",
+      "bytes": 3475
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/weather_location.py",
+      "sha256": "42ca53b924591f9bd0c069df3580f1147cf38a327c4091aba30817554c0f9b3d",
+      "bytes": 4207
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/pc/app/wechat_alert.py",
+      "sha256": "df22b26300d0eaca0f2325fc1b4ae730f6de0b89c7971254bfe24c96c4352763",
+      "bytes": 7323
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/audio_session.c",
+      "sha256": "a437d30f939dee1de264fc179622f9dcfb91eba9a720e3c291672670dea76b7e",
+      "bytes": 10933
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/audio_session.h",
+      "sha256": "07f055c0c00dfb54b2b6527a7af811b7d05a09afd209b9859f2829cc9134bbf5",
+      "bytes": 2320
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/barge_in_gate.c",
+      "sha256": "070058876edc239e2480c01101bdca67ca9b8885befea92e7a4ee2082bb8ca55",
+      "bytes": 1719
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/barge_in_gate.h",
+      "sha256": "f066d79ac6d8489968815204b76876e3064df418cbec2b49a56c19a66da07dac",
+      "bytes": 441
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/ble_central.c",
+      "sha256": "1187c497aa15f840c903aa4cb6cc150a33d5b212f36e202c7fed2d9a3e9d6631",
+      "bytes": 28277
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/ble_central.h",
+      "sha256": "bc3b6f634931b5b0d5587e5d294f3ad8b05fc99b79e1b738c94e2a951d0a26d9",
+      "bytes": 1621
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/box_caption_font.c",
+      "sha256": "a28b3eb3a3b3018e573a530aaa2ab0bd7c215cc4e587f7480cae21ad4767a1e9",
+      "bytes": 4885817
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/caption_text.c",
+      "sha256": "647049f824599a02442300f573b2bd5ca423e13c8027df7b5fc7ccc8a62b9aaf",
+      "bytes": 1655
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/caption_text.h",
+      "sha256": "1b996c7d4bf3829c76d88c12073b88b29a6a5e1a671ff25df70ed86ef9a829cd",
+      "bytes": 208
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/caption_ui.c",
+      "sha256": "f338b2f3ec9f1a77b3303a4078c9b77408b70e8f711b85934a6c13f9b3b87971",
+      "bytes": 5111
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/caption_ui.h",
+      "sha256": "8168e28e1ab8c47e686d8e38741db3008ebc38fd4c688fdc11eb0e1743159e73",
+      "bytes": 379
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/CMakeLists.txt",
+      "sha256": "844e6d0ecb1671f629da2b28d4a5e7b5509aca0929c593037324b8b493081bff",
+      "bytes": 2315
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/credential_store.c",
+      "sha256": "0d82b22bb6aaf01de1d025d14188db6c980c60f2328d039ce363527f94be68ea",
+      "bytes": 8020
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/credential_store.h",
+      "sha256": "7bfcf7e3ca6ff6bbf36165ac06ea2ed7afd854d7b27b374db286d193e16a86b6",
+      "bytes": 530
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/device_auth_client.c",
+      "sha256": "cd4ab8b0aafd9e7f43cc2713708d8026da7750082ac9250ab5eff420018e7449",
+      "bytes": 6635
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/device_auth_client.h",
+      "sha256": "2d98d01699fee66c9c55566780d2520d3601e9f235e4906feac91c113651f839",
+      "bytes": 1081
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/discovery_hint.c",
+      "sha256": "155a6312d11c4c6a6e1c78f3dd7a65306faf0a276d3296d6af70138236f3be99",
+      "bytes": 4310
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/discovery_hint.h",
+      "sha256": "614c498507b4c453b2b4775a86b770c820b2dfcce9bc472100a35ed1721ab1e1",
+      "bytes": 692
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/discovery_origin_selftest.c",
+      "sha256": "af86cd9ce45715c41914115400a754867a5ee3f29192f0f7ac1c56480cb22436",
+      "bytes": 4426
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/discovery_protocol.c",
+      "sha256": "6234ef86a78a9b5e9894d9168f6dbe07d7aec94a2f995f71df009ebac092034b",
+      "bytes": 1437
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/discovery_protocol.h",
+      "sha256": "bd516bf65d784af89b194f4a8dd56adb9b6080f2c07361ceb1d0eeb44da9efca",
+      "bytes": 510
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/display_dispatch.c",
+      "sha256": "086951ebc89025f339609c71c21a42ce5f6039e1b3998abe2641a866f9014d61",
+      "bytes": 3104
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/display_dispatch.h",
+      "sha256": "a948a5fc1d3d7515c677a66472a400af9e6bb17fc62c6f8b494f3e0b950bfaa4",
+      "bytes": 286
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/dns_ip_probe.c",
+      "sha256": "adbf4c9c627798278541e57bb77cabe52e1a7102a4b22a87c9c06b388044b5f9",
+      "bytes": 4975
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/dns_ip_probe.h",
+      "sha256": "0ae6b26fca0123a589faef20b15bf222c0df4b9962c06664a71f00d7c5d84ecb",
+      "bytes": 143
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/duplex_audio.c",
+      "sha256": "cce6f0f4cde131cd5e368c0ec406e810a45a24d222c528bb7362b00e1deb6ddb",
+      "bytes": 20088
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/duplex_audio.h",
+      "sha256": "5e2c82f4adbb0da336e2813f069afc6bc24c642412f518120d202b458e4f464e",
+      "bytes": 2392
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/health_json.c",
+      "sha256": "2fff08fa812a5336081d11f63027189389a1d56720ebbcd514893cbb7cad7ac7",
+      "bytes": 1446
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/health_json.h",
+      "sha256": "c33ea4ea0633fc16b7415397a2047cb952218ce5510a84aef481dbc87a2017d4",
+      "bytes": 272
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/health_source.h",
+      "sha256": "fc5345c00388a2e365be2fbb9f5573017909fa8f39e6ab91b686f810dec6ff3f",
+      "bytes": 1928
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/http_body_dynamic.c",
+      "sha256": "e7a222509cc2e408bea19e3a43775c82f0e758aff342099d3baf31ca3e98e1f4",
+      "bytes": 3592
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/http_body_dynamic.h",
+      "sha256": "d9a0df1fe7ce6f816925c73cdce073d68cef9bb6950fe599da3ecd34d0db0968",
+      "bytes": 823
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/idf_component.yml",
+      "sha256": "9fb189b19c4520b0668f2107a59a3de48ee6180c986c3fcb888e8a9a06d5b5fc",
+      "bytes": 489
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/mic4_layout.c",
+      "sha256": "5d7c4ae70c93ee3c63cc888c1a1ae11efbb5ab1c35bcfd6eaa9d7e79ffb827a4",
+      "bytes": 1306
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/mic4_layout.h",
+      "sha256": "ea349e3cec264a2ff2066316986893fe777b97527bac0a36d446655ac782ff2a",
+      "bytes": 680
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/public_pcm_data.inc",
+      "sha256": "fe8125497f77780ab97e2a8bb5d90fab547ec8f7bb75c5d28f9e7273c001561f",
+      "bytes": 233337
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/public_pcm_feed.c",
+      "sha256": "4ceb1e521dd9fdd5167659eae6dde533b6aa538dfcd1682a303a97ca2dfbb610",
+      "bytes": 7612
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/public_pcm_feed.h",
+      "sha256": "9bcbd374c077651b7e0041ece58760aeeff6aafce91bb6205145547b1deafa5e",
+      "bytes": 1562
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/service_discovery.c",
+      "sha256": "fc843a5a77fdb821fcd99dea737e125382316b498b81e58a2512f205eb9c27b4",
+      "bytes": 7939
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/service_discovery.h",
+      "sha256": "26f75f8233e32698d1a3a577e22796b84727ce0c715db106eb4b694822374633",
+      "bytes": 296
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/service_origin.c",
+      "sha256": "c6252bdc8cd496996df0a96bd66f4fa07e483670eabf5c11a08af379e4c5111b",
+      "bytes": 7286
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/service_origin.h",
+      "sha256": "35b8f9779d54fbddf9e0f2b14721a7967fe582ab8ada2e69a9bc7c33f7a0a3f9",
+      "bytes": 2068
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_agent.c",
+      "sha256": "a2ff3d2616a7cf67c86ed698cff96d1a25e1b6302600335ca2f772c57c71c44a",
+      "bytes": 112518
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_v2_capture.c",
+      "sha256": "7d17abd70b1804627c296e15642985d542c82748bbb0095cfe16a0c6a0184dc2",
+      "bytes": 4584
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_v2_capture.h",
+      "sha256": "515ec75b53fccb9339379fd39c1603be1ef9a7bc9905462b4c5fddefdd762bad",
+      "bytes": 1407
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_v2_runtime.inc",
+      "sha256": "5fd9ddce1135e46107f695cfab58d4063d9d2027c93df65e98a545d2d47b2e50",
+      "bytes": 36011
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_v2_transport.c",
+      "sha256": "b9373ee0077dd1f07793527c5ffcda3d599381d4d881c22d8023898ffb1fc15c",
+      "bytes": 12879
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_v2_transport.h",
+      "sha256": "7f0d7715eecefa12a13ffbcd9b405b0166b108bbf1dda2e606522bb51e25a2a4",
+      "bytes": 1684
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/voice_wake_diag.h",
+      "sha256": "17c9fc3f17b5c5da75be8dd96942a1838ec09ce414e4d49a787fc512bfda96f4",
+      "bytes": 1413
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/wake_ack.c",
+      "sha256": "20a07def8d5c90f44e08053f96401429a563e2e53bcc2b6f26b2f38a27fd26c7",
+      "bytes": 4288
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/wake_ack.h",
+      "sha256": "b6b720a31aae024f52a96f846f8bcf95250044face748dc04380eefbc12d702d",
+      "bytes": 1439
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/wake_engine.c",
+      "sha256": "a2497ea4506d4ae442d4e2dbd188716a0b6e9cd66837903d98023dfd636f43c9",
+      "bytes": 47565
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/wake_engine.h",
+      "sha256": "79cfce44e1e070b5f74eab50cc1ef0dc9dbd3b120b03c8f007d459fba99afe81",
+      "bytes": 5720
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/wav_stream.c",
+      "sha256": "b83f6bcccd45bcd9b209ce0cc83fb1b6df9e78b40e4a4042eecd7c23e790bbe6",
+      "bytes": 7381
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/main/wav_stream.h",
+      "sha256": "9e188121f2f7dcab0ab7d97493a78f58510128d06a097e0037b995910bd2e607",
+      "bytes": 1845
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/R20-normal.bin",
+      "sha256": "0a21dac46c3a6ff655bd3d89e0f7b3a79e4941158031a282eddb695582824cc7",
+      "bytes": 3052016
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/R20-display-diagnostics.bin",
+      "sha256": "0f893650c80e5fa09a0b8c72f5352b4bb32f9673d47142306c8f452841814737",
+      "bytes": 3054016
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/CMakeLists.txt",
+      "sha256": "6a7d1ccf18c8725bd701ad5ff5ff3f3a4ec7672793b9e54931c883ed7668b6ef",
+      "bytes": 299
+    },
+    {
+      "path": "recovery/box3/2026-10-21-before-repair/firmware/firmware-inputs.json",
+      "sha256": "855db5753d102c9d5654d6e12701b558a7969913b3eac4929b4b2371a44f47be",
+      "bytes": 2356598
+    }
+  ]
+}

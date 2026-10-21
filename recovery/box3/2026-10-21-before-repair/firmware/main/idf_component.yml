@@ -1,0 +1,15 @@
+dependencies:
+  espressif/button: ==3.5.0
+  espressif/cmake_utilities: ==0.5.3
+  espressif/esp-box-3: ==1.2.0~2
+  espressif/esp-dsp: ==1.4.12
+  espressif/esp-sr: ==1.9.5
+  espressif/esp_codec_dev: ==1.1.0
+  espressif/esp_lcd_ili9341: ==1.2.0
+  espressif/esp_lcd_touch: ==1.2.1
+  espressif/esp_lcd_touch_gt911: ==1.2.1
+  espressif/esp_lcd_touch_tt21100: ==1.2.1
+  espressif/esp_lvgl_port: ==2.9.0
+  espressif/icm42670: ==1.0.0
+  espressif/mdns: ==1.11.3
+  lvgl/lvgl: ==9.5.0
