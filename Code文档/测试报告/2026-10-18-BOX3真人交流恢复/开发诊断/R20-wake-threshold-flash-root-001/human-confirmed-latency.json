@@ -1,0 +1,38 @@
+{
+  "state": "HUMAN_COMMUNICATION_CONFIRMED_STABILITY_AND_LATENCY_NOT_ACCEPTED",
+  "date": "2026-10-21",
+  "human_report": "有回答；可能收进其他声音，额外回答偏题，并说1+1=7不成立、正确等于2；交流没问题，收音偏敏感但问题不大。",
+  "threshold_milli": 620,
+  "firmware_sha256": "6518eefb1c0c8dafda5db433cdc2403a3dc29df381839bde77e6d3cbf32812f6",
+  "code_bin_checkpoint": "6228c682514f39ea04f4bdb3ca32482063bc5513",
+  "intervals": [
+    {
+      "generation": 1,
+      "speech_end_to_first_pcm_ms": 3539.224,
+      "end_pending_start_to_first_pcm_ms": 3909.75,
+      "detected_speech_start_to_first_pcm_ms": 4497.253
+    },
+    {
+      "generation": 2,
+      "speech_end_to_first_pcm_ms": 1878.504,
+      "end_pending_start_to_first_pcm_ms": 2249.059
+    },
+    {
+      "generation": 3,
+      "speech_end_to_first_pcm_ms": 2033.41,
+      "end_pending_start_to_first_pcm_ms": 2403.015
+    }
+  ],
+  "measurement_scope": "Device speech_end to first_pcm_submitted; excludes preceding endpoint confirmation and speaker buffering/leading silence. Not acoustic first-word measurement; extra generations cannot establish input count.",
+  "first_word_1500ms_target_pass": false,
+  "capture": {
+    "closed": true,
+    "outcome": "root_stop",
+    "elapsed_s": 206.234,
+    "error_count": 0,
+    "disconnects": 0,
+    "serial_write_calls": 0,
+    "reset_or_flush_calls": 0
+  },
+  "next_scope": "Keep current threshold and provider configuration; background input/extra response secondary per user. Diagnose latency without adding waits."
+}

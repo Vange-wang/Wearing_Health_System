@@ -1,0 +1,98 @@
+{
+  "at_unix_s": 1792549873.2154832,
+  "installation": "PASS",
+  "image_sha256": "6518eefb1c0c8dafda5db433cdc2403a3dc29df381839bde77e6d3cbf32812f6",
+  "Git_source_bin_checkpoint": "6228c682514f39ea04f4bdb3ca32482063bc5513",
+  "threshold_startup": [
+    {
+      "device_ms": 8647,
+      "tag": "wake_engine",
+      "kind": "wake_threshold",
+      "fields": {
+        "word": 1,
+        "before_milli": 644,
+        "requested_milli": 620,
+        "set": 1,
+        "after_milli": 620
+      },
+      "elapsed_s": 8.672,
+      "unix_s": 1792549811.6666338,
+      "connection": 1
+    }
+  ],
+  "last_wake_runtime": {
+    "device_ms": 68877,
+    "kind": "wake_runtime_state",
+    "fields": {
+      "valid": 1,
+      "available": 1,
+      "state": 3,
+      "mode": 1,
+      "gen": 1,
+      "pending": 0,
+      "ack_pending": 0,
+      "cancel": 0,
+      "frames": 5758,
+      "detect": 1740,
+      "hits": 1,
+      "sample": 921280,
+      "tick": 6772,
+      "frame_tick": 6772,
+      "origin": 1,
+      "origin_cancel": 0,
+      "registered": 1,
+      "output": 0,
+      "fault": 0,
+      "tasks": 1,
+      "capture": 1
+    },
+    "elapsed_s": 68.891,
+    "unix_s": 1792549871.889591,
+    "connection": 1
+  },
+  "last_display_heartbeat": {
+    "device_ms": 66287,
+    "tag": "display_diag",
+    "kind": "display_heartbeat",
+    "fields": {
+      "tick": 2157,
+      "er": 2,
+      "ea": 2,
+      "vr": 0,
+      "va": 0,
+      "submit": 66,
+      "done": 66,
+      "errors": 0,
+      "pi": 2,
+      "po": 2,
+      "di": 2,
+      "dout": 2,
+      "free": 22883,
+      "largest": 13312
+    },
+    "elapsed_s": 66.25,
+    "unix_s": 1792549869.251723,
+    "connection": 1
+  },
+  "last_health": {
+    "device_ms": 68947,
+    "kind": "health_v2_result",
+    "fields": {
+      "transport": 1,
+      "http": 200,
+      "schema_valid": 1,
+      "ready": 1
+    },
+    "elapsed_s": 68.891,
+    "unix_s": 1792549871.889591,
+    "connection": 1
+  },
+  "v2_session_ready_count": 1,
+  "fault_event_counts": {},
+  "capture_running": true,
+  "capture_session": 52821,
+  "capture_max_seconds": 900,
+  "human_test": "PENDING_USER_RESULT",
+  "latency_target_pass": false,
+  "other_service_actions": []
+}

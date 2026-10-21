@@ -1,0 +1,171 @@
+{
+  "route_status_counts": [
+    {
+      "route": "/api/v2/voice/events",
+      "http": 200,
+      "count": 6
+    },
+    {
+      "route": "/api/v2/voice/session",
+      "http": 200,
+      "count": 1
+    },
+    {
+      "route": "/api/v2/voice/stream",
+      "http": 200,
+      "count": 5
+    }
+  ],
+  "error_token_counts": {
+    "invalid_http": 0,
+    "audio_idle_timeout": 0,
+    "timeout_token": 0,
+    "recognition_failed_token": 0,
+    "answer_failed_token": 0,
+    "pcm_idle_warning": 0
+  },
+  "stream_done_numeric": [
+    {
+      "llm_ttft_ms": 771,
+      "llm_total_ms": 917,
+      "tts_first_ms": 342,
+      "tts_total_ms": 640,
+      "sentence_count": 1,
+      "chunk_count": 8,
+      "tool_ms": 0,
+      "tool_elapsed_ms": 0,
+      "tts_segment_gap_max_ms": 69,
+      "tts_segment_gap_count": 7
+    },
+    {
+      "llm_ttft_ms": 905,
+      "llm_total_ms": 1124,
+      "tts_first_ms": 318,
+      "tts_total_ms": 816,
+      "sentence_count": 1,
+      "chunk_count": 15,
+      "tool_ms": 0,
+      "tool_elapsed_ms": 0,
+      "tts_segment_gap_max_ms": 61,
+      "tts_segment_gap_count": 14
+    },
+    {
+      "llm_ttft_ms": 808,
+      "llm_total_ms": 1025,
+      "tts_first_ms": 437,
+      "tts_total_ms": 1702,
+      "sentence_count": 2,
+      "chunk_count": 23,
+      "tool_ms": 0,
+      "tool_elapsed_ms": 0,
+      "tts_segment_gap_max_ms": 82,
+      "tts_segment_gap_count": 21
+    }
+  ],
+  "stream_done_count": 3,
+  "timing_rows_omitted": 0,
+  "leading_partial_discarded": 0,
+  "trailing_partial_discarded": 0,
+  "complete_lines_examined": 166,
+  "log_bytes_examined": 18391,
+  "log_end_offset": 4522144,
+  "schema": 1,
+  "mode": "summary",
+  "at": 1792550009.1736507,
+  "mark_at": 1792549793.9772468,
+  "health_before": {
+    "voice_ready": true,
+    "udp_listening": true,
+    "box_ready": true,
+    "health_ready": true,
+    "session_registered": true,
+    "health_read_ok": true,
+    "http": 200,
+    "box_health_age_s": 22.092999999999847,
+    "box_session_age_s": 1701.797,
+    "pc_instance_sha256": "93d5bf502d29b524c53dcc1d65c9060bae08033f3a806595b5fc6a3eb8a9ca9f",
+    "recent_counts": {
+      "asr": {
+        "running": 0,
+        "success": 0,
+        "cancelled": 0,
+        "rejected": 1,
+        "failed": 0,
+        "generated": 0,
+        "no_speech": 1,
+        "recognition_failed": 0,
+        "answer_failed": 0,
+        "present": 1,
+        "unknown_status": 0,
+        "unknown_code": 0,
+        "updated_since_mark": 0
+      },
+      "answer": {
+        "running": 0,
+        "success": 0,
+        "cancelled": 1,
+        "rejected": 0,
+        "failed": 0,
+        "generated": 0,
+        "no_speech": 0,
+        "recognition_failed": 0,
+        "answer_failed": 0,
+        "present": 1,
+        "unknown_status": 0,
+        "unknown_code": 0,
+        "updated_since_mark": 0
+      }
+    }
+  },
+  "health_after": {
+    "http": 200,
+    "voice_ready": true,
+    "pc_instance_sha256": "93d5bf502d29b524c53dcc1d65c9060bae08033f3a806595b5fc6a3eb8a9ca9f",
+    "udp_listening": true,
+    "box_ready": true,
+    "health_ready": true,
+    "session_registered": true,
+    "box_health_age_s": 18.157000000000153,
+    "box_session_age_s": 196.45399999999972,
+    "recent_counts": {
+      "asr": {
+        "running": 0,
+        "success": 1,
+        "cancelled": 0,
+        "rejected": 0,
+        "failed": 0,
+        "generated": 0,
+        "no_speech": 0,
+        "recognition_failed": 0,
+        "answer_failed": 0,
+        "present": 1,
+        "unknown_status": 0,
+        "unknown_code": 0,
+        "updated_since_mark": 1
+      },
+      "answer": {
+        "running": 0,
+        "success": 0,
+        "cancelled": 1,
+        "rejected": 0,
+        "failed": 0,
+        "generated": 0,
+        "no_speech": 0,
+        "recognition_failed": 0,
+        "answer_failed": 0,
+        "present": 1,
+        "unknown_status": 0,
+        "unknown_code": 0,
+        "updated_since_mark": 1
+      }
+    },
+    "health_read_ok": true
+  },
+  "same_pc_instance": true,
+  "raw_log_saved": false,
+  "private_text_saved": false,
+  "credentials_saved": false,
+  "service_control_actions": 0,
+  "device_actions": 0,
+  "box_markers_sent": false
+}
