@@ -1,0 +1,57 @@
+{
+  "state": "SDK_BUILD_PASS_INSTALLATION_NOT_AUTHORIZED",
+  "source_sha256": "096feda3b24c6380365ea7ed39ff332e879e9adfcbaf931d6dfcfb65cc2e0a76",
+  "review_sha256": "a505e1d0f49d87b7dcdeb9858f1ea1f7e008e79cbba0c9362542e7eeb9f04efa",
+  "single_stage_file_projected": true,
+  "flash": false,
+  "COM_actions": [],
+  "build_ttl_seconds": 300,
+  "automatic_retries": 0,
+  "baseline_Git_tag": "box3-20261021-near-voice-pass",
+  "baseline_bin_sha256": "0f893650c80e5fa09a0b8c72f5352b4bb32f9673d47142306c8f452841814737",
+  "at_unix_s": 1792549363.4880972,
+  "job": {
+    "argv": [
+      "D:/esp-idf-tools/tools/cmake/3.30.2/bin/cmake.exe",
+      "--build",
+      "D:\\box3-cdx-human-wakediag-20261018\\build",
+      "--parallel",
+      "4"
+    ],
+    "cwd": "D:\\box3-cdx-human-wakediag-20261018",
+    "ttl_seconds": 300,
+    "cleanup_ttl_seconds": 30,
+    "created_suspended": true,
+    "assigned_before_resume": true,
+    "resumed": true,
+    "job_kill_on_close": true,
+    "native_processes_enumerated": false,
+    "other_process_actions": [],
+    "cleanup_complete": true,
+    "pid": 40712,
+    "original_handle_creation_ticks": 134370229634919979,
+    "original_handle_executable": "D:\\esp-idf-tools\\tools\\cmake\\3.30.2\\bin\\cmake.exe",
+    "exit_code": 0,
+    "original_handle_signaled": true,
+    "job_active_processes": 0,
+    "job_active_processes_after_finally": 0,
+    "original_handle_signaled_after_finally": true,
+    "all_original_handles_closed": true
+  },
+  "artifacts": {
+    "voice_agent.bin": {
+      "sha256": "6518eefb1c0c8dafda5db433cdc2403a3dc29df381839bde77e6d3cbf32812f6",
+      "bytes": 3054320
+    },
+    "voice_agent.elf": {
+      "sha256": "8571823bd53b43b2a666ca03e99f5918a6691ca0aae670ee331d3cbe84c100c2",
+      "bytes": 20072172
+    },
+    "voice_agent.map": {
+      "sha256": "1c4b237bbd9c0e68ed5f250c426c151c6ede4d51b8798e42a6689ca62b6b544e",
+      "bytes": 15528291
+    }
+  },
+  "baseline_binary_unchanged": true,
+  "build_log_sha256": "5bc006238d5898024def216daa6fe4ada267b437a20b342c20bec5ef295ea7af"
+}

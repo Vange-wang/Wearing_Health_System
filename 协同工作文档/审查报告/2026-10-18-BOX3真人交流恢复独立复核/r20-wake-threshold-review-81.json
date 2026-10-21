@@ -1,0 +1,40 @@
+{
+  "review": "81",
+  "status": "PASS",
+  "verdict": "INITIALIZATION_ONLY_WORD1_THRESHOLD_EXPERIMENT_SOURCE_PASS_ROOT_INCREMENTAL_BUILD_ONLY",
+  "reviewer_thread_id": "01a14d0c-ac62-70e0-b171-dfc6bf1a6e24",
+  "packet_manifest_sha256": "e2f0a06e77d8fa61862044b6f0c200d51ec84acebbc19fa4b528223c07ad2cb2",
+  "serious_findings": [],
+  "scope": "Only11 inserted initialization lines in wake_engine.c. Static fixed ESP32-S3 SDK interface check; no mirror tests, C compilation or historical gate reopening.",
+  "review_axes": {
+    "order": ["Standards", "Spec"],
+    "Standards": {"findings": [], "conclusion": "Valid existing model pointer and both threshold function pointers precede calls. No new return/deinit/failure-state branch. Before/set-result/after values are numeric; DET_MODE90 and all inference code remain byte-identical."},
+    "Spec": {"findings": [], "conclusion": "Latest recovery-of-offline-preparation addendum admits this0.620 word1 initialization experiment and one build. Earlier distance-based causal statement is not used. Installation remains a later user decision."}
+  },
+  "bindings_and_static_checks": {
+    "packet_members_hash_and_size_verified": 4,
+    "before_sha256": "a2497ea4506d4ae442d4e2dbd188716a0b6e9cd66837903d98023dfd636f43c9",
+    "candidate_sha256": "096feda3b24c6380365ea7ed39ff332e879e9adfcbaf931d6dfcfb65cc2e0a76",
+    "byte_delta": "Exactly one11-line insertion after successful model creation; removing it restores exact baseline bytes, including every inference/hotpath statement.",
+    "latest_spec_sha256": "4db9ab20a7d596a43219c04f96fd0de4251f128f88192576e29482f599127cd2",
+    "candidate_metadata_spec_sha256": "64abe7b33eb8cc61c6b06b59471168ef4cd3642ad3ed939a47a89ce9fa3e7a79",
+    "spec_note": "Metadata points to an earlier Spec version and does not match latest bytes. Review explicitly read latest pause followed by recovery-of-offline-preparation addendum;0.620 contract unchanged. No false current-hash claim.",
+    "SDK_header": "D:/box3-cdx-human-wakediag-20261018/managed_components/espressif__esp-sr/include/esp32s3/esp_wn_iface.h",
+    "SDK_header_sha256": "ade1d875587b1b64187373c9d71f2884388c882c8b56e4bc24059e6640b64c29",
+    "SDK_API": "Word indices start at1. Setter signature(model,float threshold,int word_index), valid range0.5~0.9999, returns1 success/0 failure. Getter(model,int word_index) returnsfloat. Candidate word1/0.620 and argument order match.",
+    "failure_behavior": "Missing interface leaves numeric-1 log fields and continues original initialization. Setter failure is logged and followed by readback, without shutting down the model. Actual applied threshold still requires target log; no assumption that a failed setter applied0.620.",
+    "new_per_frame_work_or_wait": false,
+    "C_compile_or_mirror_tests": "NOT_RUN_AS_REQUESTED"
+  },
+  "allowed_boundary": {
+    "Root_incremental_build_admitted": true,
+    "action": "Root may project only bound main/wake_engine.c and reuse existing incremental build, maximum300s/no automatic retry. No new runner or SDK execution by reviewer/developer.",
+    "installation": "Not admitted by this source verdict alone; Root asks user after the new binary is available. Current working firmware and protected near-voice-pass baseline remain unchanged by reviewer.",
+    "inference": "No model/mode/gain/gate/audio/display/Boot/network/PC code changes. No claim about mode95 sensitivity or runtime default from metadata0.644.",
+    "latency_and_reliability": "Hit-rate improvement, false wakes and actual device first-word/latency impact unmeasured. Source admission does not prove threshold root cause, distance causality or human acceptance.",
+    "first_word_pass": false,
+    "human_pass": false,
+    "reviewer_SDK_COM_service_network_flash_actions": 0,
+    "writes": "This JSON only; read-only source/hash comparison and static SDK header inspection."
+  }
+}
