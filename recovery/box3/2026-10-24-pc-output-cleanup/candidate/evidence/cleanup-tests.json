@@ -1,0 +1,26 @@
+{
+  "baseline_red": {
+    "double_cancel": true,
+    "quiescent_after_release": true,
+    "leases_after_cleanup": 2,
+    "next_code": "output_capacity",
+    "next_frames": 0
+  },
+  "candidate_double_cancel": {
+    "double_cancel": true,
+    "quiescent_after_release": true,
+    "leases_after_cleanup": 0,
+    "next_code": null,
+    "next_frames": 1
+  },
+  "candidate_single_cancel": {
+    "double_cancel": false,
+    "quiescent_after_release": true,
+    "leases_after_cleanup": 0,
+    "next_code": null,
+    "next_frames": 1
+  },
+  "candidate_normal": {
+    "normal_and_exception_cleanup": "PASS"
+  }
+}

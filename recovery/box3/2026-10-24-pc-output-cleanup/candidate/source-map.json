@@ -1,0 +1,14 @@
+{
+  "source": "D:\\workbuddy_project\\项目\\可穿戴健康辅助系统\\voice-bridge\\app\\voice_v2_service.py",
+  "before_sha256": "3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1",
+  "candidate_sha256": "058a730627100f6eb55b2247fd38e54458396c74a2aec574d3201fda3da60f36",
+  "unchanged_dependencies": {
+    "stream_resources.py": "3b92623a3c17c78cfee7f73bddbf441271064243c5740bbd7f5e74840cdab4c2",
+    "voice_turn.py": "551f5fcb921840776bc84948894d1fb09d14f09d9594ac01419ac612490f0836",
+    "pipeline.py": "1672786dd06efd963d32aebacd4de4fab63859cc5dec8065e5e70f4f3743478b",
+    "voice_v2.py": "123d498a9d5989c80f258b014a38311c7b7b22c6d9fdda0b766f04a3d3855d15",
+    "voice_v2_health.py": "8311b31293855007d4b94fdcd71a66e10ec084ae6d4fae35aa56aea3a5b9d49f"
+  },
+  "production_unchanged": true,
+  "answer_before_finally_identical": true
+}

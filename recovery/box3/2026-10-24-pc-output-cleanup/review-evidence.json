@@ -1,0 +1,68 @@
+{
+  "manifest_sha256": "8a231b23bb0cd816a4f9b86eb89dfa6896171d35bf0467aae67880e428eebae6",
+  "members_verified": true,
+  "production_before_sha256": "3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1",
+  "candidate_sha256": "058a730627100f6eb55b2247fd38e54458396c74a2aec574d3201fda3da60f36",
+  "dependencies_verified": true,
+  "answer_before_finally_identical": true,
+  "replay_test_only_adjustment": "workspace import path set explicitly; candidate and before bytes preserved",
+  "cleanup": {
+    "baseline_red": {
+      "double_cancel": true,
+      "quiescent_after_release": true,
+      "leases_after_cleanup": 2,
+      "next_code": "output_capacity",
+      "next_frames": 0
+    },
+    "candidate_double_cancel": {
+      "double_cancel": true,
+      "quiescent_after_release": true,
+      "leases_after_cleanup": 0,
+      "next_code": null,
+      "next_frames": 1
+    },
+    "candidate_single_cancel": {
+      "double_cancel": false,
+      "quiescent_after_release": true,
+      "leases_after_cleanup": 0,
+      "next_code": null,
+      "next_frames": 1
+    },
+    "candidate_normal": {
+      "normal_and_exception_cleanup": "PASS"
+    }
+  },
+  "boundaries": [
+    {
+      "mode": "sync",
+      "pass": true
+    },
+    {
+      "mode": "late",
+      "pass": true
+    },
+    {
+      "mode": "preframe",
+      "pass": true
+    },
+    {
+      "mode": "queue",
+      "pass": true
+    },
+    {
+      "mode": "gen_close_error",
+      "pass": true
+    },
+    {
+      "mode": "close_failure",
+      "pass": true
+    }
+  ],
+  "independent_lifecycle": {
+    "repeated_cancel_while_gen_close_blocked": true,
+    "strong_cleanup_reference": true,
+    "no_early_release_before_resource_close": true,
+    "gen_close_exception_still_cleans_resources": true,
+    "cleanup_task_removed_and_exception_observed": true
+  }
+}

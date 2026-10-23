@@ -1,0 +1,42 @@
+--- before/voice_v2_service.py
++++ pc/app/voice_v2_service.py
+@@ -64,6 +64,7 @@
+         self.initialized=True
+         self.recent_requests={}
+         self.last_model_report={}
++        self._answer_cleanup_tasks=set()
+ 
+     def health(self):
+         from .voice_v2_health import snapshot
+@@ -139,12 +140,28 @@
+         finally:
+             self.last_model_report={'last_call_ok':getattr(model,'last_call_ok',None),
+                                     'response_model':getattr(model,'last_response_model',None)}
+-            await gen.aclose()
+-            await timing.resources.aclose()
+             def released():
+                 self.store.output_leases.pop(lease,None)
+                 quiescent.set()
+-            timing.resources.when_quiescent(released)
++            async def cleanup():
++                try:
++                    await gen.aclose()
++                finally:
++                    try:
++                        await timing.resources.aclose()
++                    finally:
++                        # Even a cleanup error must register the callback; the
++                        # resource owner, not response cancellation, gates release.
++                        timing.resources.when_quiescent(released)
++            cleanup_task=asyncio.create_task(cleanup())
++            self._answer_cleanup_tasks.add(cleanup_task)
++            def finished(task):
++                self._answer_cleanup_tasks.discard(task)
++                if not task.cancelled():
++                    task.exception()  # Observe detached cleanup failures.
++            cleanup_task.add_done_callback(finished)
++            # Repeated response cancellation cannot abandon cleanup or its lease.
++            await asyncio.shield(cleanup_task)
+ 
+     async def close(self):
+         self.initialized=False

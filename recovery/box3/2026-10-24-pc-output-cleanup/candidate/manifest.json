@@ -1,0 +1,53 @@
+{
+  "business_whitelist": [
+    "pc/app/voice_v2_service.py"
+  ],
+  "status": "OFFLINE_PASS_INDEPENDENT_REVIEW_PENDING_NOT_DEPLOYED",
+  "files": [
+    {
+      "path": "before/voice_v2_service.py",
+      "bytes": 7250,
+      "sha256": "3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1"
+    },
+    {
+      "path": "candidate.diff",
+      "bytes": 1850,
+      "sha256": "4543d67bee56ef145cf8e1705d71a9fa67f88432b7396d2b47f5b6d3f075bbf4"
+    },
+    {
+      "path": "evidence/boundary-tests.json",
+      "bytes": 328,
+      "sha256": "2885e526034a34947dea9c5ceceab8c4247a9e36f4c3ecd340f64e33dcb31369"
+    },
+    {
+      "path": "evidence/cleanup-tests.json",
+      "bytes": 627,
+      "sha256": "a19dc5be2ff9bfed59661b0200811ff64165641e0b51a24bb6e074d54d8a7c2c"
+    },
+    {
+      "path": "pc/app/voice_v2_service.py",
+      "bytes": 8136,
+      "sha256": "058a730627100f6eb55b2247fd38e54458396c74a2aec574d3201fda3da60f36"
+    },
+    {
+      "path": "source-map.json",
+      "bytes": 867,
+      "sha256": "0cd4b7608391f2e997a876bd21405c02cc4690463854cedf351b14def44a8970"
+    },
+    {
+      "path": "tests/test_boundaries.py",
+      "bytes": 4050,
+      "sha256": "832e363778143e8a8a09ceae0f74b2574337490fe458d389fb64cb75c2b9d87b"
+    },
+    {
+      "path": "tests/test_cleanup.py",
+      "bytes": 4752,
+      "sha256": "b9866b5408ac305113eb71a6fbf2dea38d616a98ac622bdcd8dbff4cc41b8235"
+    },
+    {
+      "path": "候选说明.md",
+      "bytes": 4472,
+      "sha256": "2badd1f54ef6561cc428b662febcf8ed256c00813c49892b21fbbb6f153df6fb"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "mode": "sync",
+    "pass": true
+  },
+  {
+    "mode": "late",
+    "pass": true
+  },
+  {
+    "mode": "preframe",
+    "pass": true
+  },
+  {
+    "mode": "queue",
+    "pass": true
+  },
+  {
+    "mode": "gen_close_error",
+    "pass": true
+  },
+  {
+    "mode": "close_failure",
+    "pass": true
+  }
+]

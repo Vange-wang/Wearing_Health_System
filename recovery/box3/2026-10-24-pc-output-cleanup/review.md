@@ -1,0 +1,33 @@
+# PC输出租约取消泄漏候选v1：独立复核01
+
+结论：PASS_FOR_SINGLE_FILE_DEPLOY_AND_CONTROLLED_VALIDATION。未发现该固定补丁的准入阻断项。允许Root按既定权限仅投影voice-bridge/app/voice_v2_service.py、单独重启voice并开展真人验证；本复核不执行部署或重启，不把离线通过当作现场根治或首字验收。
+
+固定manifest SHA256：8a231b23bb0cd816a4f9b86eb89dfa6896171d35bf0467aae67880e428eebae6。
+生产before：3ff9647405c96d30a4601c1aefd55dc65d34924574568fe5d0666b7dbdc8d7f1。
+准入candidate：058a730627100f6eb55b2247fd38e54458396c74a2aec574d3201fda3da60f36。
+
+## 独立执行与完整性
+
+全部manifest成员及source-map五个未修改依赖前后核对一致；生产单文件仍为before。仅在本审查目录replay副本运行，测试导入workspace改为明确绝对路径，冻结业务文件未改。使用现有venv Python -B，不调用网络/供应商/服务。answer入口至finally前逐字一致。
+
+原版真实answer+RequestResources连续两轮清理期间二次取消：资源已quiescent、pending_sync=0但租约残留2，第三轮output_capacity、帧0。候选同序列资源仍活时两租约不释放、第三轮仍拒绝；真实退出后租约0，后继帧1。单次取消、正常完成、生成异常检查通过。
+
+六项边界独立复跑均通过：同步线程未退出仍占租约；晚返回stream关闭后释放；首帧前取消；满队列工作取消退出；gen.aclose异常仍清理；异步close两次失败且quiescent=false仍占租约，实际退出通知才释放。
+
+额外独立测试test_independent_lifecycle.py：把gen.aclose阻塞并最终抛异常，响应连续追加三次cancel，清理任务仍被集合强引用；gen关闭期间及资源close等待期间均不释放租约；资源真实退出后租约归零，清理任务从集合移除，异常被观察。没有后台未观察异常回调。
+
+## 根因与修复判断
+
+原实现把回调注册置于可被响应二次取消打断的await之后，shield只保护RequestResources内部清理，不能保护外层回调登记。本候选同步创建并强引用独立cleanup任务，再shield等待；响应重复取消不再取消此任务。嵌套finally保证gen关闭异常也调用资源aclose并最终登记回调。
+
+候选没有简单前移when_quiescent。注册仍在资源aclose调用之后，避免无任务/无pending_sync时尚未启动清理却立即放行。现有RequestResources清理任务与pending_sync、任务存活、异步resource.quiescent继续控制释放；不清空租约、不提高上限、不伪造静默。清理任务完成回调移除强引用并观察异常；活资源仍受两租约门限制。不可退出的真实资源继续占位属于安全保护，不能以强制释放改成无限并发。
+
+## Spec与首字边界
+
+符合2026-10-24-ACK重叠收音句首保留-spec_cdx.md新增PC故障修复边界：业务仅一个文件；正常首帧路径不变；新增Task和集合引用仅在finally。未修改health、协议、字幕、阈值或其他服务。
+
+本次没有实际TTS/ASGI断连网络测试，队列与资源延迟使用可控fixture；未证明现场一定发生过两次取消。新增收尾任务的负载成本与声学首字未实测，不能宣布全部根因消除或首字不劣化PASS。
+
+下一门：Root核对before再单文件投影、校验candidate哈希；保留before回退；仅voice重启。真人普通问答和连续打断/重新发言应恢复答案PCM，结合当轮取消/资源释放证据检查容量不累积，并验证首字表现。其他服务、配置、SDK/固件不在此准入范围。
+
+本轮无生产写入、配置/凭据读取、进程控制、COM、SDK或设备操作。
