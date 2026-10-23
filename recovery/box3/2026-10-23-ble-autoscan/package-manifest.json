@@ -1,0 +1,56 @@
+{
+  "task": "BLE-AUTOSCAN-01",
+  "source_sha256": "4f546d2bfe7ef7e6a7e323b19ebd445562764f969d343773af4175dc7afb9d34",
+  "files": [
+    {
+      "path": "baseline-result.json",
+      "sha256": "18aec0dc849db7cfc24127f5aed612a0f2acfd919fbed52df66a3f0055836d0f",
+      "bytes": 225
+    },
+    {
+      "path": "behavior_host",
+      "sha256": "5fa9a4b13b6e3093afa07857f53e471a2ebc236121d2fa0d8fc221d7b8845a6d",
+      "bytes": 22872
+    },
+    {
+      "path": "behavior_host.c",
+      "sha256": "bf88e953c0f3f511c3455a479e7af7622a72f598259d71c132db450241cc9bfc",
+      "bytes": 15733
+    },
+    {
+      "path": "candidate-result.json",
+      "sha256": "210f58a4ee1191365763089c9b2da1f264f66c1fd6774731f16b3817acc24fee",
+      "bytes": 832
+    },
+    {
+      "path": "source/main/ble_central.c",
+      "sha256": "4f546d2bfe7ef7e6a7e323b19ebd445562764f969d343773af4175dc7afb9d34",
+      "bytes": 28515
+    },
+    {
+      "path": "source-mapping.json",
+      "sha256": "6b21fd9451ba8eedd920bddc543afe544ca3b32e12606b61ba62d26c2b428e3c",
+      "bytes": 1246
+    },
+    {
+      "path": "source.diff",
+      "sha256": "1de4b746b3ae48e129508f45d350642234d06bcca63a55a448c6ea6d16dca454",
+      "bytes": 428
+    },
+    {
+      "path": "verification.json",
+      "sha256": "e533fb8c5d8a8818e6da31ec768bb78ac8d924577b810470dcf65a48f7418933",
+      "bytes": 622
+    },
+    {
+      "path": "verify_behavior.py",
+      "sha256": "25159bdd8a9b5581ea5904f41cd252362acd30440a1b64c7164ef6262fabbc36",
+      "bytes": 9304
+    },
+    {
+      "path": "说明.md",
+      "sha256": "c9d6d83edcb6ef4eb69dcf1173247f0faa162385d45c6933d63430cc2a0b764c",
+      "bytes": 1058
+    }
+  ]
+}

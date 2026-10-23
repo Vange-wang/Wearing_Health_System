@@ -1,0 +1,6 @@
+{
+  "compile_exit": 0,
+  "run_exit": 0,
+  "stdout": "PASS no saved address boot wakes background scan and connects without key\nPASS saved address boot preserves direct connect priority\nPASS two empty scan windows retain backoff then late device connects\nPASS connected device is not scanned or preempted\nPASS disconnected first node unavailable -> rescan -> distinct compatible second node\nPASS async rc13 -> original 12s wait + 2s backoff -> scan -> save -> connect -> service discovery\nPASS remembered first connection remains direct\nPASS normal disconnect reconnects directly\nPASS synchronous connect failure -> existing backoff -> scan -> connection\nPASS already-connecting result retains current peer\nPASS discovery rejects wrong name/company/capabilities and accepts valid wrist node\n",
+  "checks_passed": 11
+}

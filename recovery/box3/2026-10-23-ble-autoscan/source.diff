@@ -1,0 +1,14 @@
+--- baseline/main/ble_central.c
++++ candidate/main/ble_central.c
+@@ -640,7 +640,10 @@
+             xSemaphoreGive(s_reconnect_sem);
+         }
+     } else {
+-        ESP_LOGI(TAG, "无对端 MAC（首次配对），等待按键触发扫描");
++        ESP_LOGI(TAG, "无对端地址，启动后台自动扫描");
++        if (s_reconnect_sem) {
++            xSemaphoreGive(s_reconnect_sem);
++        }
+     }
+ }
+ 

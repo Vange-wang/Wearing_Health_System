@@ -1,0 +1,96 @@
+{
+  "task": "BLE-AUTOSCAN-01",
+  "reviewer_thread": "01a168f5-13d8-75a1-840b-a68ed7f09d05",
+  "time": "2026-10-23T22:08:45.414938+08:00",
+  "verdict": "PASS_FOR_INCREMENTAL_BUILD",
+  "blocking_findings": [],
+  "manifest_sha256": "a104cbfb155b8a42cebbe4220a5498666301a4ad10a9a05e8d970ad45657499d",
+  "members": [
+    {
+      "path": "baseline-result.json",
+      "sha256": "18aec0dc849db7cfc24127f5aed612a0f2acfd919fbed52df66a3f0055836d0f",
+      "bytes": 225,
+      "unchanged": true
+    },
+    {
+      "path": "behavior_host",
+      "sha256": "5fa9a4b13b6e3093afa07857f53e471a2ebc236121d2fa0d8fc221d7b8845a6d",
+      "bytes": 22872,
+      "unchanged": true
+    },
+    {
+      "path": "behavior_host.c",
+      "sha256": "bf88e953c0f3f511c3455a479e7af7622a72f598259d71c132db450241cc9bfc",
+      "bytes": 15733,
+      "unchanged": true
+    },
+    {
+      "path": "candidate-result.json",
+      "sha256": "210f58a4ee1191365763089c9b2da1f264f66c1fd6774731f16b3817acc24fee",
+      "bytes": 832,
+      "unchanged": true
+    },
+    {
+      "path": "source/main/ble_central.c",
+      "sha256": "4f546d2bfe7ef7e6a7e323b19ebd445562764f969d343773af4175dc7afb9d34",
+      "bytes": 28515,
+      "unchanged": true
+    },
+    {
+      "path": "source-mapping.json",
+      "sha256": "6b21fd9451ba8eedd920bddc543afe544ca3b32e12606b61ba62d26c2b428e3c",
+      "bytes": 1246,
+      "unchanged": true
+    },
+    {
+      "path": "source.diff",
+      "sha256": "1de4b746b3ae48e129508f45d350642234d06bcca63a55a448c6ea6d16dca454",
+      "bytes": 428,
+      "unchanged": true
+    },
+    {
+      "path": "verification.json",
+      "sha256": "e533fb8c5d8a8818e6da31ec768bb78ac8d924577b810470dcf65a48f7418933",
+      "bytes": 622,
+      "unchanged": true
+    },
+    {
+      "path": "verify_behavior.py",
+      "sha256": "25159bdd8a9b5581ea5904f41cd252362acd30440a1b64c7164ef6262fabbc36",
+      "bytes": 9304,
+      "unchanged": true
+    },
+    {
+      "path": "说明.md",
+      "sha256": "c9d6d83edcb6ef4eb69dcf1173247f0faa162385d45c6933d63430cc2a0b764c",
+      "bytes": 1058,
+      "unchanged": true
+    }
+  ],
+  "single_on_sync_replacement_verified": true,
+  "harness_source_text_verified": true,
+  "host_rerun": {
+    "exit": 0,
+    "checks_passed": 11,
+    "stdout": "PASS no saved address boot wakes background scan and connects without key\nPASS saved address boot preserves direct connect priority\nPASS two empty scan windows retain backoff then late device connects\nPASS connected device is not scanned or preempted\nPASS disconnected first node unavailable -> rescan -> distinct compatible second node\nPASS async rc13 -> original 12s wait + 2s backoff -> scan -> save -> connect -> service discovery\nPASS remembered first connection remains direct\nPASS normal disconnect reconnects directly\nPASS synchronous connect failure -> existing backoff -> scan -> connection\nPASS already-connecting result retains current peer\nPASS discovery rejects wrong name/company/capabilities and accepts valid wrist node\n",
+    "stderr_bytes": 132,
+    "stderr_sha256": "b280c454d6f559e56eb3f5ed39f3ba084b8d1744a3ff7fe016b21ff86dea1aca",
+    "capture_note": "First run stdout passed; Windows WSL stderr UTF-8 decoding failed. Repeated using raw byte capture; exit0 and all11 checks passed."
+  },
+  "baseline_red": "developer fixed evidence only; not independently rerun",
+  "candidate_recompiled": false,
+  "sdk_build": false,
+  "device_or_COM_access": false,
+  "first_word_latency_pass": false,
+  "COM7_actual_test": false,
+  "report_sha256": "163aadbd094607e25ce9bb53442cc2de81fc654f07bbc0e4ff29afd0f1f78153",
+  "log": {
+    "path": "D:\\workbuddy_project\\项目\\可穿戴健康辅助系统\\协同工作文档\\AGENT身份注册信息\\独立代码复核Agent-01a130e0-b0d2-7963-9df1-88c3a1c3e453-工作记录.md",
+    "before_bytes": 100521,
+    "after_bytes": 101162,
+    "before_sha256": "7067601c24db5a52515c58485f7eb6e918ba79b9bf42ef0491d88a6bf8b36278",
+    "after_sha256": "631f890b1ead29d31e36ed41b2682ae9d9e5aa1021c70bc01b88738714923153",
+    "original_prefix_preserved": true,
+    "utf8_no_bom": true
+  }
+}

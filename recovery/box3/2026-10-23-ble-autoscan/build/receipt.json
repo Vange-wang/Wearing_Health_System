@@ -1,0 +1,51 @@
+{
+  "source_sha256": "4f546d2bfe7ef7e6a7e323b19ebd445562764f969d343773af4175dc7afb9d34",
+  "rollback_bin_sha256": "2cbeb9548cdb5d96942d0835542081ba063d5028d8e1f6e66910926b22fa6874",
+  "flash": false,
+  "service_changes": false,
+  "automatic_retries": 0,
+  "job": {
+    "argv": [
+      "D:/esp-idf-tools/tools/cmake/3.30.2/bin/cmake.exe",
+      "--build",
+      "D:/box3-cdx-human-wakediag-20261018/build",
+      "--parallel",
+      "4"
+    ],
+    "cwd": "D:\\box3-cdx-human-wakediag-20261018",
+    "ttl_seconds": 300,
+    "cleanup_ttl_seconds": 30,
+    "created_suspended": true,
+    "assigned_before_resume": true,
+    "resumed": true,
+    "job_kill_on_close": true,
+    "native_processes_enumerated": false,
+    "other_process_actions": [],
+    "cleanup_complete": true,
+    "pid": 36244,
+    "original_handle_creation_ticks": 134372381714658312,
+    "original_handle_executable": "D:\\esp-idf-tools\\tools\\cmake\\3.30.2\\bin\\cmake.exe",
+    "exit_code": 0,
+    "original_handle_signaled": true,
+    "job_active_processes": 0,
+    "job_active_processes_after_finally": 0,
+    "original_handle_signaled_after_finally": true,
+    "all_original_handles_closed": true
+  },
+  "state": "BUILD_PASS_NOT_INSTALLED",
+  "other_main_files_unchanged": true,
+  "artifacts": {
+    "voice_agent.bin": {
+      "sha256": "c83ec23d77a27963f6e33355ec77dd4097b031733d9c56032aab21c46c746437",
+      "bytes": 3054336
+    },
+    "voice_agent.elf": {
+      "sha256": "3cfa1cc5727ea90e012b6916b59255102425358a4a03b46549af86809df9fc31",
+      "bytes": 20072268
+    },
+    "voice_agent.map": {
+      "sha256": "d7923282e2b1bcfdffcc63f6db3482e82efdb88c29b04e7e9457af7b1f1a38f5",
+      "bytes": 15528291
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "state": "HOST_BEHAVIOR_PASS_REVIEW_PENDING",
+  "checks_passed": 11,
+  "baseline_red_exit": 134,
+  "candidate_exit": 0,
+  "actual_functions": "verbatim required_caps_present through reconnect_task plus on_sync and ble_central_start_scan",
+  "simulation": "Host API doubles; scheduler delay simulated; advertising parsed fields injected; GATT invocation checked, no actual subscription/notification/SDK/device/network execution",
+  "COM7_actual_test": false,
+  "first_word_latency_pass": false,
+  "stage_written": false,
+  "source_sha256": "4f546d2bfe7ef7e6a7e323b19ebd445562764f969d343773af4175dc7afb9d34"
+}

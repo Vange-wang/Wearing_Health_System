@@ -1,0 +1,7 @@
+{
+  "case": "baseline",
+  "compile_exit": 0,
+  "run_exit": 134,
+  "stdout": "",
+  "assertion_stderr": "\u0000behavior_host: behavior_host.c:309: main: Assertion `gives==1 && scan_calls==0 && connect_calls==0' failed."
+}

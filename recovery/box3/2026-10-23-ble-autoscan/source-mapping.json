@@ -1,0 +1,17 @@
+{
+  "source": "D:\\workbuddy_project\\项目\\可穿戴健康辅助系统\\Code文档\\测试报告\\2026-10-18-BOX3真人交流恢复\\开发诊断\\R20-ble-autoscan-v1\\source\\main\\ble_central.c",
+  "source_sha256": "4f546d2bfe7ef7e6a7e323b19ebd445562764f969d343773af4175dc7afb9d34",
+  "destination": "D:/box3-cdx-human-wakediag-20261018/main/ble_central.c",
+  "expected_destination_sha256": "d4f3b07deaaaee7555e20482e6e3778f3ebe7bf5747188fb7772458be34a241b",
+  "baseline_bin_sha256": "2cbeb9548cdb5d96942d0835542081ba063d5028d8e1f6e66910926b22fa6874",
+  "existing_build_receipt": "D:\\workbuddy_project\\项目\\可穿戴健康辅助系统\\Code文档\\测试报告\\2026-10-18-BOX3真人交流恢复\\开发诊断\\R23-rewrite-candidate-v1\\R20-ble-rescan-sdk-root-001\\receipt.json",
+  "suggested_existing_command": [
+    "D:/esp-idf-tools/tools/cmake/3.30.2/bin/cmake.exe",
+    "--build",
+    "D:/box3-cdx-human-wakediag-20261018/build",
+    "--parallel",
+    "4"
+  ],
+  "executed": false,
+  "rollback_source": "D:\\workbuddy_project\\项目\\可穿戴健康辅助系统\\Code文档\\测试报告\\2026-10-18-BOX3真人交流恢复\\开发诊断\\R23-rewrite-candidate-v1\\R20-ble-rescan-v1\\source\\main\\ble_central.c"
+}
