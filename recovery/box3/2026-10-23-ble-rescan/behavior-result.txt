@@ -1,0 +1,6 @@
+PASS async rc13 -> original 12s wait + 2s backoff -> scan -> save -> connect -> service discovery
+PASS remembered first connection remains direct
+PASS normal disconnect reconnects directly
+PASS synchronous connect failure -> existing backoff -> scan -> connection
+PASS already-connecting result retains current peer
+PASS discovery rejects wrong name/company/capabilities and accepts valid wrist node

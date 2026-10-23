@@ -1,0 +1,10 @@
+{
+  "baseline_ble_sha256": "1187c497aa15f840c903aa4cb6cc150a33d5b212f36e202c7fed2d9a3e9d6631",
+  "matches_github_checkpoint_source": true,
+  "installed_firmware_record": "6518eefb1c0c8dafda5db433cdc2403a3dc29df381839bde77e6d3cbf32812f6",
+  "voice_human_status": "User confirmed reply restored after one BOX3 reset",
+  "detector_live_interface_verified": true,
+  "developer_task": "01a14d0c-8f25-7e81-9e16-69a8f45a0465",
+  "scope": "BLE rescan after saved-peer connection failure only",
+  "status": "DEVELOPER_ACTIVE_NOT_INSTALLED"
+}

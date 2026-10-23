@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "reviewer": "Root independent of implementation owner",
+  "standards_findings": [],
+  "spec_findings": [],
+  "scope": "Exactly two RAM flag assignments in existing failure paths; preserved NVS, voice, filters, normal first connect and disconnect retry. No added wait.",
+  "host_checks": 6,
+  "source_sha256": "d4f3b07deaaaee7555e20482e6e3778f3ebe7bf5747188fb7772458be34a241b",
+  "device_pass": false
+}

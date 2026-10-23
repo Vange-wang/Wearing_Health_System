@@ -1,0 +1,12 @@
+{
+  "status": "HOST_BEHAVIOR_PASS_SDK_AND_DEVICE_PENDING",
+  "compiler": "WSL /usr/bin/cc -std=c11 -Wall -Wextra -Werror",
+  "compile_timeout_seconds": 30,
+  "run_timeout_seconds": 5,
+  "exit_code": 0,
+  "checks_passed": 6,
+  "test_scope": "Verbatim candidate GAP callbacks and reconnect task compiled against synthetic host APIs; scheduler delays simulated, no hardware or network. GATT service discovery invocation checked; subscription code unchanged but not executed by this harness.",
+  "business_diff": "Two assignments invalidate only RAM peer-valid flag after synchronous non-EALREADY connection failure and asynchronous connection failure. Existing NVS persistence, matching, backoff and normal disconnect remain unchanged.",
+  "baseline_unchanged": true,
+  "candidate_sha256": "d4f3b07deaaaee7555e20482e6e3778f3ebe7bf5747188fb7772458be34a241b"
+}

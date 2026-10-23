@@ -1,0 +1,19 @@
+{
+  "expected_service": "7a0b1000-8c1d-4e2f-9a3b-5c6d7e8f9a0b",
+  "expected_characteristic": "7a0b1001-8c1d-4e2f-9a3b-5c6d7e8f9a0b",
+  "archived_wrist_uuid_match": true,
+  "payload_saved": false,
+  "matching_device_count": 1,
+  "advertisement_caps_match": true,
+  "connected": true,
+  "service_present": true,
+  "characteristic_present": true,
+  "properties": [
+    "notify"
+  ],
+  "notification_lengths": [
+    8,
+    8
+  ],
+  "disconnected": true
+}
