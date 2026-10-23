@@ -1,0 +1,77 @@
+{
+  "date": "2026-10-23",
+  "state": "BLE_CONNECTION_SUBSCRIPTION_RECEIVE_UPLOAD_PASS_HUMAN_MEASUREMENT_PENDING",
+  "firmware_sha256": "2cbeb9548cdb5d96942d0835542081ba063d5028d8e1f6e66910926b22fa6874",
+  "source_commit": "5b83d13a5d3909523860b696148c22e7b949cf9a",
+  "ble_event_counts": {
+    "central_synced": 1,
+    "remembered_peer_direct_connect": 1,
+    "connect_failed": 1,
+    "reconnect_backoff": 1,
+    "scan_start": 1,
+    "scan_hit": 1,
+    "peer_remembered": 1,
+    "connected": 1,
+    "service_found": 1,
+    "characteristic_found": 1,
+    "subscribe_request": 1,
+    "frame": 10,
+    "upload_success": 1,
+    "subscribe_complete": 1
+  },
+  "timeline": [
+    {
+      "device_ms": 23916,
+      "kind": "scan_start"
+    },
+    {
+      "device_ms": 24016,
+      "kind": "scan_hit"
+    },
+    {
+      "device_ms": 24296,
+      "kind": "connected"
+    },
+    {
+      "device_ms": 24696,
+      "kind": "service_found"
+    },
+    {
+      "device_ms": 25096,
+      "kind": "characteristic_found"
+    },
+    {
+      "device_ms": 29096,
+      "kind": "subscribe_complete"
+    }
+  ],
+  "frame_sequences": [
+    "17",
+    "18",
+    "19",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "26"
+  ],
+  "voice_threshold": [
+    {
+      "word": 1,
+      "before_milli": 644,
+      "requested_milli": 620,
+      "set": 1,
+      "after_milli": 620
+    }
+  ],
+  "voice_session_ready": true,
+  "voice_source_unchanged": true,
+  "pc_configuration_unchanged": true,
+  "detector_firmware_unchanged": true,
+  "human_voice_health_query": "PENDING",
+  "health_measurements_in_git": false,
+  "capture_session": 62616,
+  "capture_max_seconds": 300
+}

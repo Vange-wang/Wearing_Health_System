@@ -1,0 +1,41 @@
+{
+  "at_unix_s": 1792761286.8343182,
+  "user_authorized": true,
+  "image_sha256": "2cbeb9548cdb5d96942d0835542081ba063d5028d8e1f6e66910926b22fa6874",
+  "app_offset": "0x10000",
+  "other_partition_writes": [],
+  "voice_source_changes": false,
+  "service_changes": false,
+  "automatic_retries": 0,
+  "job": {
+    "argv": [
+      "C:\\Users\\86166\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "-B",
+      "-u",
+      "-c",
+      "import ctypes,esptool; ctypes.windll.kernel32.SetConsoleCP(65001); ctypes.windll.kernel32.SetConsoleOutputCP(65001); esptool.ESPLoader.WRITE_FLASH_ATTEMPTS=1; esptool.main(['--chip', 'esp32s3', '--port', 'COM5', '--baud', '460800', '--before', 'default_reset', '--after', 'hard_reset', '--connect-attempts', '1', 'write_flash', '0x10000', 'D:\\\\workbuddy_project\\\\\u9879\u76ee\\\\\u53ef\u7a7f\u6234\u5065\u5eb7\u8f85\u52a9\u7cfb\u7edf\\\\Code\u6587\u6863\\\\\u6d4b\u8bd5\u62a5\u544a\\\\2026-10-18-BOX3\u771f\u4eba\u4ea4\u6d41\u6062\u590d\\\\\u5f00\u53d1\u8bca\u65ad\\\\R23-rewrite-candidate-v1\\\\R20-ble-rescan-sdk-root-001\\\\voice_agent.bin'])"
+    ],
+    "cwd": "D:\\workbuddy_project\\\u9879\u76ee\\\u53ef\u7a7f\u6234\u5065\u5eb7\u8f85\u52a9\u7cfb\u7edf\\voice-bridge",
+    "ttl_seconds": 120,
+    "cleanup_ttl_seconds": 30,
+    "created_suspended": true,
+    "assigned_before_resume": true,
+    "resumed": true,
+    "job_kill_on_close": true,
+    "native_processes_enumerated": false,
+    "other_process_actions": [],
+    "cleanup_complete": true,
+    "pid": 11444,
+    "original_handle_creation_ticks": 134372348868360530,
+    "original_handle_executable": "C:\\Users\\86166\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+    "exit_code": 0,
+    "original_handle_signaled": true,
+    "job_active_processes": 0,
+    "job_active_processes_after_finally": 0,
+    "original_handle_signaled_after_finally": true,
+    "all_original_handles_closed": true
+  },
+  "MD5_verified": true,
+  "hard_reset_called": true,
+  "state": "APP_WRITTEN_STARTUP_PENDING"
+}
