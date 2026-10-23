@@ -1,0 +1,882 @@
+--- runtime_baseline/pc/app/splitter.py
++++ v2/pc/app/splitter.py
+@@ -119,3 +119,154 @@
+             return []  # 纯标点/空白跳过（Spec §6.2 空句子）
+         logger.debug("sentence (%d chars): %s", len(s), s[:40])
+         return [s]
++
++
++# Caption-enabled V2 only. Legacy SentenceBuffer remains the first-task oracle.
++from dataclasses import dataclass
++
++
++@dataclass(frozen=True)
++class SpeechPiece:
++    tts_text: str
++    raw_text: str
++    reason: str
++    raw_start: int
++    raw_end: int
++
++
++def clean_display(text: str, *, at_line_start: bool = True) -> str:
++    """Clean once before transport; never invent whitespace or eat paragraphs."""
++    if not text or text.isspace():
++        return text
++    left = len(text) - len(text.lstrip())
++    right = len(text.rstrip())
++    content = text[left:right]
++    first_line_start = at_line_start or '\n' in text[:left] or '\r' in text[:left]
++    line_start = r"^" if first_line_start else r"(?<=\n)"
++    # A marker-only list line may have its required horizontal separator in T.
++    if first_line_start and content in ('-', '+') and text[right:right+1] in (' ', '\t'):
++        content = ''
++    content = _MD_BOLD_ITALIC.sub(r"\1", content)
++    content = _MD_INLINE_CODE.sub(r"\1", content)
++    # Horizontal whitespace only: \s* here would swallow blank paragraphs.
++    content = re.sub(line_start + r"#{1,6}[ \t]*", "", content, flags=re.MULTILINE)
++    content = re.sub(r"\[([^\]\n]+)\]\([^\n)]*\)", r"\1", content)
++    content = re.sub(line_start + r">[ \t]?", "", content, flags=re.MULTILINE)
++    content = re.sub(line_start + r"[-*+][ \t]+", "", content, flags=re.MULTILINE)
++    content = _MD_ASTERISK_LEFT.sub("", content)
++    return text[:left] + content + text[right:]
++
++
++class DisplayCleaner:
++    """Per-response source line context, independent of semantic/transport cuts."""
++    def __init__(self):
++        self.at_line_start = True
++
++    def clean(self, text: str) -> str:
++        display = clean_display(text, at_line_start=self.at_line_start)
++        # Advance using RAW source, not the shortened display string.
++        for ch in text:
++            if ch in '\r\n':
++                self.at_line_start = True
++            elif ch not in ' \t':
++                self.at_line_start = False
++        return display
++
++
++class CaptionSentenceBuffer:
++    """Lazy events: first TTS text/trigger matches legacy, later text uses sentences.
++
++    raw offsets index the input only. Display text is cleaned separately after
++    audio yield and has no shared offset space with these source positions.
++    """
++    _ABBREVIATIONS = frozenset(('dr.', 'mr.', 'mrs.', 'ms.', 'prof.', 'sr.',
++                               'jr.', 'st.', 'vs.', 'etc.', 'e.g.', 'i.e.'))
++    _CLOSERS = frozenset('"\'”’)]}')
++
++    def __init__(self, max_chars=50, soft_limit=240, hard_limit=320):
++        self.legacy = SentenceBuffer(max_chars)
++        self.soft_limit, self.hard_limit = soft_limit, hard_limit
++        self.first = True
++        self.raw = ''
++        self.start = 0
++        self.pending = False
++
++    def _piece(self, count, reason, tts=None):
++        raw, self.raw = self.raw[:count], self.raw[count:]
++        start = self.start
++        self.start += count
++        text = clean_markdown(raw) if tts is None else tts
++        if not _SPEAKABLE.search(text):
++            text = ''
++        return SpeechPiece(text, raw, reason, start, self.start)
++
++    def _abbreviation(self):
++        match = re.search(r'([A-Za-z]+(?:\.[A-Za-z]+)*\.)$', self.raw)
++        token = match.group(1) if match else ''
++        return token.lower() in self._ABBREVIATIONS or bool(
++            re.fullmatch(r'(?:[A-Za-z]\.)+', token))
++
++    def _later(self, ch):
++        if self.pending:
++            last = self.raw[-1]
++            decimal = last == '.' and len(self.raw) > 1 and self.raw[-2].isdigit() and ch.isdigit()
++            protected = last == '.' and self._abbreviation()
++            if decimal or protected:
++                self.pending = False
++            elif ch not in self._CLOSERS and ch not in '.!?。！？':
++                self.pending = False
++                yield self._piece(len(self.raw), 'natural')
++        self.raw += ch
++        if ch in '。！？；;〜～…':
++            self.pending = False
++            yield self._piece(len(self.raw), 'natural')
++        elif ch in '.!?':
++            self.pending = True
++        elif ch == '\n':
++            self.pending = False
++            yield self._piece(len(self.raw), 'natural')
++        if len(self.raw) >= self.soft_limit:
++            boundary = 0
++            # Prefer clause punctuation, then words; no new timer/lookahead.
++            for marks in (',，;；', ' \t\n'):
++                for i in range(len(self.raw) - 1, self.soft_limit // 2 - 1, -1):
++                    if self.raw[i] in marks:
++                        boundary = i + 1
++                        break
++                if boundary:
++                    break
++            if boundary or len(self.raw) >= self.hard_limit:
++                yield self._piece(boundary or self.hard_limit, 'capacity')
++                self.pending = bool(self.raw and self.raw[-1] in '.!?。！？；;〜～…')
++
++    def feed_events(self, text):
++        for ch in text:
++            if not self.first:
++                yield from self._later(ch)
++                continue
++            was_dot = self.legacy._pending_dot
++            self.raw += ch
++            outputs = self.legacy.feed(ch)
++            if not outputs:
++                continue
++            # A deferred period flush occurs before this character. Otherwise
++            # the legacy retained tail defines the exact consumed source span.
++            cut = len(self.raw) - (1 if was_dot and not ch.isdigit()
++                                   else len(self.legacy._buf))
++            event = self._piece(cut, 'baseline_first', outputs[0])
++            remainder, self.raw = self.raw, ''
++            self.first = False
++            yield event  # caller can enqueue first TTS before processing suffix
++            for rest in remainder:
++                yield from self._later(rest)
++
++    def flush_events(self):
++        if self.first:
++            texts = self.legacy.flush()
++            if self.raw:
++                yield self._piece(len(self.raw), 'baseline_first' if texts else 'eof',
++                                  texts[0] if texts else '')
++            self.first = False
++        elif self.raw:
++            yield self._piece(len(self.raw), 'eof')
++        self.pending = False
+--- runtime_baseline/pc/app/pipeline.py
++++ v2/pc/app/pipeline.py
+@@ -450,7 +450,13 @@
+             }
+ 
+         # LLM 流 → 分句 → 逐句 TTS → 帧
+-        splitter = SentenceBuffer(max_chars=self.sentence_max_chars)
++        if captions_enabled:
++            from .splitter import CaptionSentenceBuffer, DisplayCleaner
++            splitter = CaptionSentenceBuffer(max_chars=self.sentence_max_chars)
++            display_cleaner = DisplayCleaner()
++        else:
++            splitter = SentenceBuffer(max_chars=self.sentence_max_chars)
++        caption_tail = []
+         llm_t0 = time.perf_counter()
+         ttft_done = False
+         tts_total_ms = 0.0
+@@ -608,8 +614,8 @@
+                         logger.info("worker: 收到结束哨兵，退出")
+                         break
+                     seq, kind, sentence = item
+-                    if caption_texts is not None:
+-                        caption_texts[seq] = sentence
++                    if caption_texts is not None and seq not in caption_texts:
++                        caption_texts[seq] = [sentence]
+                     if not getattr(timing, 'private_input', False):
+                         logger.info("worker: 取到任务 seq=%s kind=%s 句子=%r", seq, kind, (sentence or '')[:20])
+                     seg_i = 0  # next unqueued segment, also used by failure markers
+@@ -679,7 +685,7 @@
+                     # Legacy bytes-only callers have no known caption text.
+                     ack_text, ack_wav = ack if isinstance(ack, tuple) else (None, ack)
+                     if caption_texts is not None and ack_text is not None:
+-                        caption_texts[seq] = ack_text
++                        caption_texts[seq] = [ack_text]
+                     await frame_queue.put(((seq, 0), "comfort", ack_wav, True))
+                     seq += 1
+                     comfort_queued = True
+@@ -712,12 +718,30 @@
+                     if not ttft_done:
+                         timing["llm_ttft_ms"] = round((time.perf_counter() - llm_t0) * 1000)
+                         ttft_done = True
+-                    for sentence in splitter.feed(delta):
++                    if captions_enabled:
++                        for piece in splitter.feed_events(delta):
++                            caption_tail.append(piece.raw_text)
++                            if piece.tts_text:
++                                caption_texts[seq] = caption_tail[:]
++                                caption_tail.clear()
++                                await tts_queue.put((seq, "sentence", piece.tts_text))
++                                seq += 1
++                    else:
++                        for sentence in splitter.feed(delta):
++                            await tts_queue.put((seq, "sentence", sentence))
++                            seq += 1
++                if captions_enabled:
++                    for piece in splitter.flush_events():
++                        caption_tail.append(piece.raw_text)
++                        if piece.tts_text:
++                            caption_texts[seq] = caption_tail[:]
++                            caption_tail.clear()
++                            await tts_queue.put((seq, "sentence", piece.tts_text))
++                            seq += 1
++                else:
++                    for sentence in splitter.flush():
+                         await tts_queue.put((seq, "sentence", sentence))
+                         seq += 1
+-                for sentence in splitter.flush():
+-                    await tts_queue.put((seq, "sentence", sentence))
+-                    seq += 1
+             finally:
+                 # This is the LLM/template stream completion boundary. It must
+                 # not include TTS workers, frame reordering, or sentence gaps.
+@@ -797,7 +821,8 @@
+                             from .caption_protocol import CaptionStream
+                             caption_stream = CaptionStream()
+                         if next_seg == 0:
+-                            caption_stream.add(caption_texts.pop(next_sentence_seq, None))
++                            for raw_piece in caption_texts.pop(next_sentence_seq, []):
++                                caption_stream.add(display_cleaner.clean(raw_piece))
+                         caption_frame = caption_stream.next_frame()
+                         if caption_frame is not None:
+                             yield caption_frame
+@@ -845,7 +870,15 @@
+             tts_total_ms = (time.perf_counter() - tts_wall_t0) * 1000
+ 
+         timing["tts_total_ms"] = round(tts_total_ms)
++        if captions_enabled:
++            timing["caption_status"] = "audio_delivered" if total_frames else "unavailable_no_audio"
++        if captions_enabled and delivery_failed[0]:
++            # A clean EOF would falsely mark a missing spoken/caption span complete.
++            raise RuntimeError("caption_delivery_incomplete")
+         if caption_stream is not None:
++            for raw_piece in caption_tail:
++                caption_stream.add(display_cleaner.clean(raw_piece))
++            caption_tail.clear()
+             while (caption_frame := caption_stream.next_frame()) is not None:
+                 yield caption_frame
+         timing["sentence_count"] = sentence_count
+--- runtime_baseline/sdk/main/caption_text.c
++++ v2/sdk/main/caption_text.c
+@@ -26,20 +26,77 @@
+     return true;
+ }
+ 
+-bool caption_text_page(const char *text,size_t length,size_t *offset,char *out,size_t capacity)
++static uint32_t codepoint(const char *s, size_t n)
+ {
+-    if(!text||!offset||!out||!capacity||*offset>length)return false;
+-    size_t cursor=*offset,used=0;unsigned row=0,column=0;
+-    while(cursor<length&&row<3){
+-        size_t n=character(text+cursor,length-cursor);if(!n)return false;
+-        if(column==18&&text[cursor]!='\n'){
+-            if(used+1>=capacity)return false;
+-            out[used++]='\n';row++;column=0;if(row==3)break;
++    uint32_t cp=(uint8_t)s[0];
++    if(n>1) {cp&=(1U<<(7-n))-1;for(size_t i=1;i<n;i++)cp=(cp<<6)|((uint8_t)s[i]&63);}
++    return cp;
++}
++
++bool caption_text_line(const char *text,size_t length,bool finished,unsigned pixels,
++                       caption_glyph_width_t width,void *context,char *out,
++                       size_t capacity,caption_line_t *line)
++{
++    if(!text||!out||!capacity||!line||!width||pixels<16)return false;
++    *line=(caption_line_t){0};out[0]=0;
++    size_t i=0,used=0,break_in=0,break_out=0;
++    unsigned x=0;bool in_word=false;
++    while(i<length) {
++        size_t n=character(text+i,length-i);if(!n)return false;
++        uint32_t cp=codepoint(text+i,n);
++        if(cp=='\r' && i+n==length && !finished) {out[used]=0;return true;}
++        if(cp=='\n'||cp=='\r') {
++            size_t consume=n;
++            if(cp=='\r'&&i+n<length&&text[i+n]=='\n')consume++;
++            line->consumed=i+consume;line->ready=true;out[used]=0;return true;
+         }
+-        if(n>=capacity-used)return false;
+-        memcpy(out+used,text+cursor,n);used+=n;
+-        if(text[cursor]=='\n'){row++;column=0;}else column++;
+-        cursor+=n;
++        bool space=cp==' '||cp=='\t';
++        bool cjk=(cp>=0x2e80&&cp<=0x9fff)||(cp>=0xff00&&cp<=0xffef);
++        unsigned w=width(space?' ':cp,context);
++        char fallback='?';const char *glyph=text+i;size_t bytes=n;
++        if(space){glyph=" ";bytes=1;}
++        if(!w){w=width('?',context);glyph=&fallback;bytes=1;}
++        /* Asset contract: 8/16 px. Never accept zero-width/unbounded output. */
++        if(w<8||w>pixels)return false;
++        if(x+w>pixels) {
++            if(break_in){
++                used=break_out;line->consumed=break_in;
++                /* Keep CJK closing punctuation with the preceding glyph. */
++                if(break_in==i && (cp==0x3002||cp==0xff0c||cp==0xff01||cp==0xff1f||cp==0xff1b||cp==0xff1a||cp==0x3001||cp==0x3009||cp==0x300b||cp==0xff09)) {
++                    size_t prev=i-1;while(prev && ((uint8_t)text[prev]&0xc0)==0x80)prev--;
++                    size_t pn=i-prev;uint32_t pc=codepoint(text+prev,pn);
++                    size_t bytes_back=width(pc,context)?pn:1;
++                    if(!prev||bytes_back>used)return false;
++                    used-=bytes_back;line->consumed=prev;
++                }
++            }
++            else {
++                /* Long unbroken word only: reserve a visible ASCII continuation. */
++                unsigned mark=width('>',context);
++                if(mark<8||mark>pixels)return false;
++                while(used && x+mark>pixels) {
++                    size_t prev=i-1;while(prev && ((uint8_t)text[prev]&0xc0)==0x80)prev--;
++                    size_t pn=i-prev;uint32_t pc=codepoint(text+prev,pn);
++                    unsigned pw=width(pc,context);if(!pw)pw=width('?',context);
++                    size_t output_bytes=width(pc,context)?pn:1;
++                    if(output_bytes>used)return false;
++                    used-=output_bytes;x-=pw;i=prev;
++                }
++                if(!i||used+1>=capacity)return false;
++                out[used++]='>';line->continuation=true;line->consumed=i;
++            }
++            line->ready=true;out[used]=0;return true;
++        }
++        if(used+bytes>=capacity)return false;
++        memcpy(out+used,glyph,bytes);used+=bytes;x+=w;i+=n;
++        if(space||cjk){break_in=i;break_out=used;}
++        if(cjk){line->cjk_chars++;in_word=false;}
++        else if(space)in_word=false;
++        else if(!in_word){line->latin_words++;in_word=true;}
+     }
+-    out[used]=0;*offset=cursor;return true;
++    if(finished) {line->consumed=i;line->ready=i!=0;}
++    else if(break_in)used=break_out;
++    else used=0;
++    out[used]=0;
++    return true;
+ }
+--- runtime_baseline/sdk/main/caption_text.h
++++ v2/sdk/main/caption_text.h
+@@ -1,5 +1,16 @@
+ #pragma once
+ #include <stdbool.h>
+ #include <stddef.h>
+-bool caption_text_valid(const char *text,size_t length);
+-bool caption_text_page(const char *text,size_t length,size_t *offset,char *out,size_t capacity);
++#include <stdint.h>
++/* Returns actual drawable advance; zero selects the visible '?' fallback. */
++typedef unsigned (*caption_glyph_width_t)(uint32_t cp, void *context);
++typedef struct {
++    size_t consumed;
++    unsigned latin_words, cjk_chars;
++    bool ready, continuation;
++} caption_line_t;
++bool caption_text_valid(const char *text, size_t length);
++/* WAIT can contain a provisional complete-word prefix, with consumed == 0. */
++bool caption_text_line(const char *text, size_t length, bool finished,
++                       unsigned pixels, caption_glyph_width_t width, void *context,
++                       char *out, size_t capacity, caption_line_t *line);
+--- runtime_baseline/sdk/main/caption_ui.c
++++ v2/sdk/main/caption_ui.c
+@@ -10,139 +10,290 @@
+ #include "wake_engine.h"
+ 
+ LV_FONT_DECLARE(box_caption_font);
+-typedef struct caption_node {
+-    struct caption_node *next;
+-    char *text;
+-    uint32_t generation;
+-    size_t length;
+-} caption_node_t;
+-static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+-static caption_node_t *head, *tail;
+-static uint32_t current_generation;
++#define BODY_CAPACITY 32768U
++#define VIEW_CAPACITY 800U
++#define LINE_CAPACITY 160U
++static portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
++static char *body;
+ static lv_obj_t *label;
+-static bool worker_ready;
+-
+-static bool generation_matches(uint32_t generation)
+-{
+-    portENTER_CRITICAL(&mux);
+-    bool matches=current_generation==generation;
+-    portEXIT_CRITICAL(&mux);
+-    return matches && generation!=0 && wake_engine_generation()==generation;
+-}
+-
+-static void dispose(caption_node_t *node)
+-{
+-    while (node) {
+-        caption_node_t *next = node->next;
+-        free(node->text); free(node); node = next;
+-    }
++static bool layout_supported=true;
++static struct {
++    uint32_t generation, epoch, applied_epoch;
++    size_t read, used, high_water;
++    bool finished, unavailable, desired_expanded, applied_expanded;
++} state;
++_Static_assert(sizeof(state)<=512, "caption control budget");
++/* UI-worker-owned; never touched by the receiver or the LVGL layout callback. */
++static char rows[5][LINE_CAPACITY], scratch[VIEW_CAPACITY];
++static unsigned row_count;
++static uint32_t view_epoch;
++static TickType_t scroll_at;
++
++static unsigned glyph_width(uint32_t cp,void *unused)
++{
++    (void)unused;lv_font_glyph_dsc_t d;
++    if(!lv_font_get_glyph_dsc(&box_caption_font,&d,cp,0))return 0;
++    if(d.is_placeholder || (d.adv_w!=8 && d.adv_w!=16) || d.ofs_x<0 ||
++       d.box_w+d.ofs_x>d.adv_w || d.box_h>20)return 0;
++    return d.adv_w;
++}
++
++static bool matches(uint32_t gen,uint32_t epoch)
++{
++    portENTER_CRITICAL(&mux);
++    bool valid=gen && state.generation==gen && state.epoch==epoch;
++    portEXIT_CRITICAL(&mux);
++    return valid && wake_engine_generation()==gen;
+ }
+ 
+ void caption_ui_init(void)
+ {
+-    label = lv_label_create(lv_scr_act());
+-    lv_obj_set_size(label, 296, 100);
+-    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -12);
+-    lv_obj_set_style_text_font(label, &box_caption_font, 0);
+-    lv_obj_set_style_text_line_space(label, 8, 0);
+-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+-    lv_label_set_text(label, "");
++    if(!body)body=malloc(BODY_CAPACITY);
++    label=lv_label_create(lv_scr_act());
++    lv_obj_set_style_text_font(label,&box_caption_font,0);
++    lv_obj_set_style_text_line_space(label,8,0);
++    lv_obj_set_style_text_align(label,LV_TEXT_ALIGN_CENTER,0);
++    lv_obj_set_style_pad_all(label,0,0);
++    lv_obj_set_style_border_width(label,0,0);
++    lv_label_set_long_mode(label,LV_LABEL_LONG_CLIP);
++    lv_obj_set_size(label,296,100);lv_obj_set_pos(label,12,128);
++    lv_label_set_text(label,"");
+ }
+ 
+ void caption_ui_begin(uint32_t generation)
+ {
+     portENTER_CRITICAL(&mux);
+-    caption_node_t *old = head;
+-    head = tail = NULL;
+-    current_generation = generation;
+-    portEXIT_CRITICAL(&mux);
+-    dispose(old);
++    state.generation=generation;++state.epoch;state.read=state.used=state.high_water=0;
++    state.finished=false;state.unavailable=body==NULL || !layout_supported;state.desired_expanded=false;
++    portEXIT_CRITICAL(&mux);
++    if(!body)ESP_LOGW("caption","unavailable reason=body_allocation");
+ }
+ 
+ void caption_ui_cancel(uint32_t generation)
+ {
+     portENTER_CRITICAL(&mux);
+-    caption_node_t *old = NULL;
+-    if (current_generation == generation) {
+-        current_generation = 0;
+-        old = head; head = tail = NULL;
+-    }
+-    portEXIT_CRITICAL(&mux);
+-    dispose(old);
+-}
+-
+-bool caption_ui_submit(char *text, uint32_t generation)
+-{
+-    caption_node_t *node = malloc(sizeof(*node));
+-    if (node == NULL) {
+-        free(text); ESP_LOGW("caption", "unavailable reason=no_memory"); return false;
+-    }
+-    *node = (caption_node_t){.text=text,.generation=generation,.length=strlen(text)};
+-    portENTER_CRITICAL(&mux);
+-    bool accepted = worker_ready && generation != 0 && current_generation == generation;
+-    if (accepted) {
+-        if (tail) tail->next = node; else head = node;
+-        tail = node;
+-    }
+-    portEXIT_CRITICAL(&mux);
+-    if (!accepted) dispose(node);
++    if(state.generation==generation) {
++        state.generation=0;++state.epoch;state.read=state.used=0;
++        state.finished=false;state.desired_expanded=false;state.unavailable=false;
++    }
++    portEXIT_CRITICAL(&mux);
++}
++
++void caption_ui_finish(uint32_t generation)
++{
++    bool ended=false;size_t pending=0,peak=0;
++    portENTER_CRITICAL(&mux);
++    if(generation && state.generation==generation && !state.finished) {
++        state.finished=true;ended=true;pending=state.used;peak=state.high_water;
++    }
++    portEXIT_CRITICAL(&mux);
++    if(ended)ESP_LOGI("caption","input_end generation=%u pending_bytes=%u high_water=%u",
++                     (unsigned)generation,(unsigned)pending,(unsigned)peak);
++}
++
++bool caption_ui_submit(char *text,uint32_t generation)
++{
++    if(!text)return false;
++    size_t length=strlen(text);bool accepted=false,overflow=false;
++    if(!caption_text_valid(text,length)){free(text);return false;}
++    portENTER_CRITICAL(&mux);
++    if(body && generation && state.generation==generation && !state.finished && !state.unavailable) {
++        if(length<=512 && length<=BODY_CAPACITY-state.used) {
++            size_t end=(state.read+state.used)%BODY_CAPACITY;
++            size_t first=BODY_CAPACITY-end;if(first>length)first=length;
++            memcpy(body+end,text,first);memcpy(body,text+first,length-first);
++            state.used+=length;if(state.used>state.high_water)state.high_water=state.used;
++            accepted=true;
++        } else {
++            state.unavailable=true;state.read=state.used=0;
++            ++state.epoch; /* Invalidate every in-flight body/layout snapshot. */
++            overflow=true;
++        }
++    }
++    portEXIT_CRITICAL(&mux);
++    free(text);
++    if(overflow)ESP_LOGW("caption","unavailable reason=capacity generation=%u capacity=%u",(unsigned)generation,BODY_CAPACITY);
+     return accepted;
+ }
+ 
+-static caption_node_t *active = NULL;
+-static size_t offset = 0;
+-static uint32_t shown_generation = 0;
+-static TickType_t next_page = 0;
++bool caption_ui_layout_expanded(void)
++{
++    portENTER_CRITICAL(&mux);bool value=state.applied_expanded;portEXIT_CRITICAL(&mux);
++    return value;
++}
++
++void caption_ui_apply_layout(void (*place_emoji)(bool),int width,int height)
++{
++    if(width!=320||height!=240) {
++        portENTER_CRITICAL(&mux);
++        layout_supported=false;
++        if(!state.unavailable)++state.epoch;
++        state.unavailable=true;
++        portEXIT_CRITICAL(&mux);
++        return;
++    }
++    portENTER_CRITICAL(&mux);
++    uint32_t epoch=state.epoch;
++    bool expanded=state.generation && state.desired_expanded;
++    bool changed=epoch!=state.applied_epoch || expanded!=state.applied_expanded;
++    portEXIT_CRITICAL(&mux);
++    if(!changed)return;
++    /* LVGL owner applies both objects together. Epoch acknowledgement, not the
++     * previous mode bit, authorizes the worker to fill a new turn's viewport. */
++    if(place_emoji)place_emoji(expanded);
++    if(label) {
++        lv_obj_set_size(label,expanded?304:296,expanded?148:100);
++        lv_obj_set_pos(label,expanded?8:12,expanded?88:128);
++    }
++    portENTER_CRITICAL(&mux);
++    state.applied_expanded=expanded; /* Actual geometry, even for a stale request. */
++    bool current=state.epoch==epoch &&
++        expanded==(state.generation && state.desired_expanded);
++    if(current)state.applied_epoch=epoch;
++    portEXIT_CRITICAL(&mux);
++    /* A begin racing the LVGL callback cannot expose new content in old geometry.
++     * The next timer reconciles the latest request; the audio path never waits. */
++    if(!current && label)lv_label_set_text(label,"");
++}
++
++static TickType_t reading_time(const char *line)
++{
++    unsigned words=0,cjk=0;bool word=false;
++    for(const unsigned char *s=(const unsigned char *)line;*s;s++) {
++        if(*s>=0xe0 && *s<0xf0){cjk++;word=false;}
++        else if(*s<128) {
++            if(*s==' '||*s=='\t'||*s=='>')word=false;
++            else if(!word){words++;word=true;}
++        }
++    }
++    unsigned ms=words*250+cjk*200;if(ms<800)ms=800;
++    return pdMS_TO_TICKS(ms);
++}
+ 
+ static void caption_ui_step(void)
+ {
++    /* No reading-clock/cursor changes before a successful nonblocking UI lock.
++     * The receiver never takes this lock. Work remains at most five lines. */
++    if(!bsp_display_lock(1))return;
++    uint32_t gen,epoch;bool unavailable,expanded,layout_ready;size_t read;
++    portENTER_CRITICAL(&mux);
++    gen=state.generation;epoch=state.epoch;
++    portEXIT_CRITICAL(&mux);
++    if(gen && wake_engine_generation()!=gen) {
++        caption_ui_cancel(gen);
++        portENTER_CRITICAL(&mux);gen=state.generation;epoch=state.epoch;portEXIT_CRITICAL(&mux);
++    }
++    if(epoch!=view_epoch) {
++        row_count=0;scroll_at=0;memset(rows,0,sizeof(rows));view_epoch=epoch;
++    }
++    portENTER_CRITICAL(&mux);
++    unavailable=state.unavailable;expanded=state.applied_expanded;
++    layout_ready=state.applied_epoch==epoch;read=state.read;
++    portEXIT_CRITICAL(&mux);
++    if(gen && !unavailable && !layout_ready) {
++        if(label && lv_label_get_text(label)[0])lv_label_set_text(label,"");
++        bsp_display_unlock();return;
++    }
++    /* Tentative rows live on the existing UI task stack. The ring and committed
++     * rows remain recoverable until label update AND same-version validation. */
++    char proposed[5][LINE_CAPACITY];memcpy(proposed,rows,sizeof(proposed));
++    unsigned count=row_count,max_rows=expanded?5:3;
++    size_t consumed=0;
++    bool reset_clock=scroll_at==0,valid=true;
++    TickType_t now=xTaskGetTickCount();
++    if(gen && !unavailable) {
++        for(unsigned work=0;work<5;work++) {
++            portENTER_CRITICAL(&mux);
++            valid=state.epoch==epoch && !state.unavailable && state.read==read &&
++                state.applied_epoch==epoch && consumed<=state.used;
++            if(!valid){portEXIT_CRITICAL(&mux);break;}
++            size_t remaining=state.used-consumed;
++            bool finished=state.finished;
++            size_t n=remaining;if(n>=sizeof(scratch))n=sizeof(scratch)-1;
++            for(size_t i=0;i<n;i++)scratch[i]=body[(read+consumed+i)%BODY_CAPACITY];
++            portEXIT_CRITICAL(&mux);
++            while(n && !caption_text_valid(scratch,n))n--;
++            scratch[n]=0;
++            if(!n)break;
++            char line[LINE_CAPACITY];caption_line_t result;
++            if(!caption_text_line(scratch,n,finished&&n==remaining,expanded?304:296,
++                                  glyph_width,NULL,line,sizeof(line),&result)) {
++                portENTER_CRITICAL(&mux);
++                if(state.epoch==epoch){state.unavailable=true;++state.epoch;}
++                portEXIT_CRITICAL(&mux);valid=false;break;
++            }
++            /* Never index rows outside either the physical array or confirmed
++             * viewport. Epoch gating makes same-turn shrink unreachable. */
++            if(count>max_rows || count>5){valid=false;break;}
++            if(count>=max_rows) {
++                if(!expanded) {
++                    portENTER_CRITICAL(&mux);
++                    if(state.epoch==epoch && !state.unavailable)state.desired_expanded=true;
++                    portEXIT_CRITICAL(&mux);break;
++                }
++                if(!result.ready && !line[0])break;
++                if(reset_clock || (int32_t)(now-scroll_at)<0)break;
++                memmove(proposed,proposed+1,(max_rows-1)*LINE_CAPACITY);count--;
++                proposed[count][0]=0;reset_clock=true;
++            }
++            if(count>=5){valid=false;break;}
++            memcpy(proposed[count],line,strlen(line)+1);
++            if(!result.ready)break;
++            if(result.consumed>remaining){valid=false;break;}
++            consumed+=result.consumed;count++;
++        }
++    }
++    size_t size=0;
++    if(unavailable) {
++        const char *message="[caption unavailable]";memcpy(scratch,message,strlen(message)+1);
++    } else {
++        unsigned shown=count;
++        if(shown<max_rows && shown<5 && proposed[shown][0])shown++;
++        if(shown>max_rows || shown>5)valid=false;
++        for(unsigned i=0;valid && i<shown;i++) {
++            size_t n=strlen(proposed[i]);if(size+n+2>sizeof(scratch)){valid=false;break;}
++            if(i)scratch[size++]='\n';
++            memcpy(scratch+size,proposed[i],n);size+=n;
++        }
++        scratch[size]=0;
++    }
++    valid=valid && matches(gen,epoch);
++    const char *next=valid?scratch:"";
++    if(label && strcmp(lv_label_get_text(label),next)!=0)lv_label_set_text(label,next);
++    bool painted=label && strcmp(lv_label_get_text(label),next)==0;
++    if(valid && painted && !unavailable) {
+         portENTER_CRITICAL(&mux);
+-        uint32_t generation = current_generation;
++        valid=state.epoch==epoch && state.generation==gen && !state.unavailable &&
++            state.applied_epoch==epoch && state.applied_expanded==expanded &&
++            state.read==read && consumed<=state.used;
++        if(valid){state.read=(read+consumed)%BODY_CAPACITY;state.used-=consumed;}
+         portEXIT_CRITICAL(&mux);
+-        if (generation && wake_engine_generation() != generation) {
+-            caption_ui_cancel(generation); generation = 0;
+-        }
+-        if (active && active->generation != generation) { dispose(active); active=NULL; }
+-        if (shown_generation != generation) {
+-            if (!bsp_display_lock(1)) { return; }
+-            if (label) lv_label_set_text(label, "");
+-            bsp_display_unlock(); shown_generation=generation; next_page=0;
+-        }
+-        if (active == NULL) {
+-            portENTER_CRITICAL(&mux);
+-            active=head;
+-            if (active) { head=active->next; active->next=NULL; if (!head) tail=NULL; }
+-            portEXIT_CRITICAL(&mux);
+-            offset=0;
+-        }
+-        TickType_t now=xTaskGetTickCount();
+-        if (active && (next_page == 0 || (int32_t)(now-next_page)>=0)) {
+-            /* Three 18-glyph lines are a viewport, not a response length cap. */
+-            char page[3*18*4+3+1]; size_t cursor=offset;
+-            if (!caption_text_page(active->text,active->length,&cursor,page,sizeof(page))) {
+-                ESP_LOGW("caption","unavailable reason=utf8_page");
+-                dispose(active);active=NULL;return;
+-            }
+-            if (bsp_display_lock(1)) {
+-                bool valid=generation_matches(active->generation);
+-                if (label) lv_label_set_text(label,valid?page:"");
+-                /* Cancellation is asynchronous; clear before releasing the UI
+-                 * lock if the generation changed during the label update. */
+-                if (label && !generation_matches(active->generation)) lv_label_set_text(label,"");
+-                bsp_display_unlock(); offset=cursor; next_page=now+pdMS_TO_TICKS(3500);
+-                if (!active->text[offset]) { dispose(active);active=NULL; }
+-            }
+-        }
+-
++        if(valid) {
++            memcpy(rows,proposed,sizeof(rows));row_count=count;
++            if(reset_clock && (count || proposed[0][0]))
++                scroll_at=xTaskGetTickCount()+reading_time(rows[0]);
++        }
++    }
++    /* Overflow/cancel may occur during font measurement or the LVGL setter.
++     * Surface the CURRENT failure rather than leaving stale text on screen. */
++    if(!matches(gen,epoch)) {
++        portENTER_CRITICAL(&mux);
++        bool failed=state.generation==gen && gen && state.unavailable;
++        portEXIT_CRITICAL(&mux);
++        const char *current=failed?"[caption unavailable]":"";
++        if(label && strcmp(lv_label_get_text(label),current)!=0)lv_label_set_text(label,current);
++    }
++    bsp_display_unlock();
+ }
+ 
+ void caption_ui_task(void *unused)
+ {
+     (void)unused;
+-    portENTER_CRITICAL(&mux); worker_ready=true; portEXIT_CRITICAL(&mux);
+-    while(true) { caption_ui_step(); vTaskDelay(pdMS_TO_TICKS(50)); }
++    while(true){caption_ui_step();vTaskDelay(pdMS_TO_TICKS(50));}
+ }
+ #ifdef CAPTION_UI_HOST_TEST
+-void caption_ui_test_step(void) { worker_ready=true;caption_ui_step(); }
++void caption_ui_test_step(void){caption_ui_step();}
++size_t caption_ui_test_metric(int k){
++    return k==0?state.used:k==1?state.high_water:k==2?state.epoch:k==3?state.unavailable:sizeof(state)+sizeof(rows)+sizeof(scratch)+BODY_CAPACITY;
++}
+ #endif
+--- runtime_baseline/sdk/main/caption_ui.h
++++ v2/sdk/main/caption_ui.h
+@@ -1,9 +1,14 @@
+ #pragma once
+ #include <stdint.h>
+ #include <stdbool.h>
+-void caption_ui_init(void); /* display initialized, caller owns LVGL lock */
++void caption_ui_init(void);
+ void caption_ui_task(void *unused);
+ void caption_ui_begin(uint32_t generation);
+ void caption_ui_cancel(uint32_t generation);
+-/* Takes ownership in all cases. Never waits for display lock. */
++void caption_ui_finish(uint32_t generation);
++/* Owns and frees text on every path; bounded copy, no UI-space wait. */
+ bool caption_ui_submit(char *text, uint32_t generation);
++/* LVGL thread only, invoked by voice_agent's layout timer. Callback moves emoji
++ * in the same display transaction. It never hides/scales the image. */
++void caption_ui_apply_layout(void (*place_emoji)(bool expanded), int width, int height);
++bool caption_ui_layout_expanded(void);
+--- runtime_baseline/sdk/main/voice_agent.c
++++ v2/sdk/main/voice_agent.c
+@@ -1160,11 +1160,13 @@
+     /* 逐帧解析：4 字节大端长度 + WAV 载荷 */
+     uint8_t hdr[4];
+     int frames = 0;
++    bool answer_caption_started = false;
+     while (true) {
+         response_read_status_t read_status = read_response_exact(
+             client, hdr, sizeof(hdr), capture_generation, &progress, true);
+         if (read_status == RESPONSE_READ_COMPLETE_EOF) {
+             response_complete = true;
++            if (answer_caption_started) caption_ui_finish(capture_generation);
+             break;
+         }
+         if (read_status != RESPONSE_READ_OK) {
+@@ -1175,6 +1177,10 @@
+         uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
+                        ((uint32_t)hdr[2] << 8) | (uint32_t)hdr[3];
+         if (len == UINT32_MAX) {
++            if (caption_protocol && frames > 0 && !answer_caption_started) {
++                caption_ui_begin(capture_generation);
++                answer_caption_started = true;
++            }
+             if (!caption_protocol || frames == 0 ||
+                 !receive_caption(client, capture_generation, &progress)) {
+                 ESP_LOGW(TAG, "caption:failed reason=protocol_or_read");
+@@ -1274,6 +1280,7 @@
+             } else {
+                 caption_ui_begin(context->codec.generation);
+                 (void)caption_ui_submit(caption, context->codec.generation);
++                caption_ui_finish(context->codec.generation);
+                 if (ack_output_cancelled(user)) {
+                     caption_ui_cancel(context->codec.generation);
+                 }
+@@ -2100,6 +2107,17 @@
+  * 在 bsp_i2c_init() 之后调用；SPIFFS 挂载 + 显示 + 背光 + 创建 emoji 图片控件。 */
+ static bool apply_emoji_on_lvgl(const char *path);
+ static bool apply_visual_on_lvgl(uint32_t command);
++static void caption_place_emoji(bool expanded)
++{
++    if (s_emoji_img) lv_obj_align(s_emoji_img, LV_ALIGN_CENTER, 0, expanded ? -76 : -66);
++}
++static void caption_layout_tick(lv_timer_t *timer)
++{
++    (void)timer;
++    lv_display_t *display=lv_display_get_default();
++    if (display) caption_ui_apply_layout(caption_place_emoji,
++        lv_display_get_horizontal_resolution(display), lv_display_get_vertical_resolution(display));
++}
+ static void display_init(void)
+ {
+     bsp_display_cfg_t cfg = {
+@@ -2120,10 +2138,14 @@
+         s_emoji_img = lv_img_create(lv_scr_act());
+         lv_image_set_scale(s_emoji_img, LISTENING_VISUAL_SCALE_NORMAL);
+         caption_ui_init();
++        if (!lv_timer_create(caption_layout_tick, 20, NULL)) {
++            caption_ui_apply_layout(NULL, 0, 0);
++            ESP_LOGW(TAG, "caption:unavailable reason=layout_timer");
++        }
+         bool dispatch=display_dispatch_init(apply_emoji_on_lvgl,apply_visual_on_lvgl);
+         ESP_LOGI(TAG,"display:stage id=4 ok=%d",dispatch);
+         ESP_LOGI(TAG, "caption:ready protocol=after-audio-v1 font=BoxCaption16 emoji_px=80");
+-        lv_obj_align(s_emoji_img, LV_ALIGN_CENTER, 0, -66);
++        caption_place_emoji(caption_ui_layout_expanded());
+         bsp_display_unlock();
+         ESP_LOGI(TAG, "display init OK: emoji widget created");
+     } else {
+@@ -2206,7 +2228,7 @@
+     if (!esp_ptr_in_dram(&stack_marker)) { ESP_LOGE(TAG,"display:stage id=5 ok=0"); return false; }
+     if (!s_emoji_img || !path || s_listening_visual_active) return false;
+     lv_img_set_src(s_emoji_img,path);
+-    lv_obj_align(s_emoji_img, LV_ALIGN_CENTER, 0, -66);
++    caption_place_emoji(caption_ui_layout_expanded());
+     return lv_image_get_src(s_emoji_img)!=NULL;
+ }
+ 
+@@ -2248,7 +2270,7 @@
+             lv_anim_delete(s_emoji_img, listening_scale_exec);
+             if (start) {
+                 lv_img_set_src(s_emoji_img, s_status_emoji_path);
+-                lv_obj_align(s_emoji_img, LV_ALIGN_CENTER, 0, -66);
++                caption_place_emoji(caption_ui_layout_expanded());
+                 lv_image_set_scale(s_emoji_img,
+                                    LISTENING_VISUAL_SCALE_NORMAL);
+                 lv_anim_t animation;
+@@ -2270,7 +2292,7 @@
+                 lv_image_set_scale(s_emoji_img,
+                                    LISTENING_VISUAL_SCALE_NORMAL);
+                 lv_img_set_src(s_emoji_img, s_status_emoji_path);
+-                lv_obj_align(s_emoji_img, LV_ALIGN_CENTER, 0, -66);
++                caption_place_emoji(caption_ui_layout_expanded());
+             }
+ 
+     if (!start) s_listening_visual_active=false;
