@@ -1,0 +1,505 @@
+--- before/wake_engine.c
++++ v2/wake_engine.c
+@@ -39,6 +39,8 @@
+     bool deferred_input;
+     bool ack_pending;
+     bool ack_speech_detected;
++    bool ack_protected;
++    bool ack_completion_pending;
+     uint32_t tail_low_frames;
+     uint32_t tail_total_frames;
+     uint32_t first_speech_frames;
+@@ -592,6 +594,9 @@
+             }
+             if (s_state.tail_low_frames >= TAIL_CONFIRM_LOW_FRAMES) {
+                 s_state.state = WAKE_ENGINE_STATE_ACK_PLAYING;
++                s_state.ack_protected = true;
++                s_state.ack_completion_pending = false;
++                s_state.ack_speech_detected = false;
+                 s_state.ack_pending = true;
+                 s_state.events |= WAKE_ENGINE_EVENT_TRIGGERED;
+             } else if (s_state.tail_total_frames >=
+@@ -896,60 +901,77 @@
+     return pending;
+ }
+ 
++bool wake_engine_ack_protected(uint32_t generation)
++{
++    state_lock();
++    bool active = generation != 0 && s_state.generation == generation &&
++                  s_state.mode == WAKE_ENGINE_MODE_WAKE && s_state.ack_protected;
++    state_unlock();
++    return active;
++}
++
++/* Playback task publishes completion only. The PCM producer owns buffer cleanup. */
++void wake_engine_ack_playback_done(uint32_t generation)
++{
++    state_lock();
++    if (generation != 0 && s_state.generation == generation && s_state.ack_protected) {
++        s_state.ack_protected = false;
++        s_state.ack_completion_pending = true;
++    }
++    state_unlock();
++}
++
++bool wake_engine_ack_completion_pending(uint32_t generation)
++{
++    state_lock();
++    bool pending = generation != 0 && s_state.generation == generation &&
++                   s_state.ack_completion_pending;
++    state_unlock();
++    return pending;
++}
++
++/* PCM producer only, after the entire AEC batch has entered pre-roll.
++ * Admission keeps the available onset; subsequent PCM goes to the existing V2 store. */
+ bool wake_engine_note_ack_speech(uint32_t generation)
+ {
+     bool accepted = false;
+-
+-    state_lock();
+-    if (generation != 0U && generation == s_state.generation &&
+-        s_state.mode == WAKE_ENGINE_MODE_WAKE) {
+-        if (s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING) {
+-            s_state.ack_speech_detected = true;
+-            accepted = true;
+-        } else if (s_state.state == WAKE_ENGINE_STATE_WAIT_SPEECH) {
+-            s_state.state = WAKE_ENGINE_STATE_UPLOADING;
+-            s_state.events |= WAKE_ENGINE_EVENT_SPEECH_START;
+-            accepted = true;
+-        }
+-    }
+-    state_unlock();
+-    if (accepted) {
+-        trim_pre_roll_for_upload();
+-    }
++    state_lock();
++    if (generation != 0 && s_state.generation == generation &&
++        s_state.mode == WAKE_ENGINE_MODE_WAKE && !s_state.ack_speech_detected &&
++        (s_state.ack_protected || s_state.ack_completion_pending) &&
++        s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING && !s_state.cancel_round) {
++        s_state.ack_speech_detected = true;
++        s_state.state = WAKE_ENGINE_STATE_UPLOADING;
++        s_state.events |= WAKE_ENGINE_EVENT_SPEECH_START;
++        accepted = true;
++    }
++    state_unlock();
+     return accepted;
+ }
+ 
++/* PCM producer only. Never reset an already admitted input or its endpoint. */
+ bool wake_engine_ack_complete(uint32_t generation)
+ {
+-    bool completed = false;
+-    bool speech_ready = false;
++    bool completed = false, empty = false;
+     state_lock();
+     if (generation != 0 && s_state.generation == generation &&
+         s_state.mode == WAKE_ENGINE_MODE_WAKE &&
+-        s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING) {
+-        speech_ready = s_state.ack_speech_detected;
+-        s_state.state = speech_ready ? WAKE_ENGINE_STATE_UPLOADING
+-                                     : WAKE_ENGINE_STATE_WAIT_SPEECH;
++        (s_state.ack_protected || s_state.ack_completion_pending)) {
++        s_state.ack_protected = false;
++        s_state.ack_completion_pending = false;
+         s_state.ack_pending = false;
+-        s_state.ack_speech_detected = false;
+-        s_state.first_speech_frames = 0;
+-        s_state.wait_samples = 0;
++        empty = !s_state.ack_speech_detected &&
++                s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING;
++        if (empty) {
++            s_state.state = WAKE_ENGINE_STATE_WAIT_SPEECH;
++            s_state.first_speech_frames = 0;
++            s_state.wait_samples = 0;
++        }
+         s_state.events |= WAKE_ENGINE_EVENT_ACK_COMPLETE;
+-        if (speech_ready) {
+-            s_state.events |= WAKE_ENGINE_EVENT_SPEECH_START;
+-        }
+         completed = true;
+     }
+     state_unlock();
+-    if (completed) {
+-        if (speech_ready) {
+-            trim_pre_roll_for_upload();
+-        } else {
+-            clear_pre_roll();
+-        }
+-        clear_hold();
+-        clear_backlog();
+-    }
++    if (empty) { clear_pre_roll(); clear_hold(); clear_backlog(); }
+     return completed;
+ }
+ 
+@@ -967,6 +989,9 @@
+     s_state.pending_ticket=0;s_state.unbound_cancel_requested=false;
+     s_state.begin_pending = false;
+     s_state.ack_pending = false;
++    s_state.ack_protected = false;
++    s_state.ack_completion_pending = false;
++    s_state.ack_speech_detected = false;
+     s_state.tail_low_frames = 0;
+     s_state.tail_total_frames = 0;
+     s_state.first_speech_frames = 0;
+--- before/wake_engine.h
++++ v2/wake_engine.h
+@@ -88,6 +88,10 @@
+ bool wake_engine_capture_begin_pending(void);
+ bool wake_engine_bind_capture(uint32_t generation);
+ bool wake_engine_take_ack_request(uint32_t *generation);
++/* note/complete are PCM-producer operations; playback_done only publishes. */
++bool wake_engine_ack_protected(uint32_t generation);
++void wake_engine_ack_playback_done(uint32_t generation);
++bool wake_engine_ack_completion_pending(uint32_t generation);
+ bool wake_engine_note_ack_speech(uint32_t generation);
+ bool wake_engine_ack_complete(uint32_t generation);
+ void wake_engine_begin_key(uint32_t generation);
+--- before/voice_agent.c
++++ v2/voice_agent.c
+@@ -1292,6 +1292,19 @@
+     return written;
+ }
+ 
++/* Physical ACK lease outlives wake generation changes (key/cancel). */
++static uint32_t s_ack_playback_generation;
++static bool ack_cleanup_pending(uint32_t generation)
++{
++    return wake_engine_ack_protected(generation) ||
++           __atomic_load_n(&s_ack_playback_generation, __ATOMIC_ACQUIRE) == generation;
++}
++
++static void wait_ack_cleanup(uint32_t generation)
++{
++    while (ack_cleanup_pending(generation)) ulTaskNotifyTake(pdTRUE, 1);
++}
++
+ static void ack_task(void *arg)
+ {
+     (void)arg;
+@@ -1305,20 +1318,21 @@
+             continue;
+         }
+ 
+-        while (!audio_session_acquire_playback(AUDIO_SESSION_OWNER_TALK)) {
++        bool ack_lease = false;
++        while (!(ack_lease = audio_session_acquire_playback(AUDIO_SESSION_OWNER_TALK))) {
+             if (wake_engine_generation() != generation ||
+                 wake_engine_state() != WAKE_ENGINE_STATE_ACK_PLAYING) {
+                 break;
+             }
+             vTaskDelay(1);
+         }
+-        if (!audio_session_owner_is(AUDIO_SESSION_OWNER_TALK) ||
+-            wake_engine_generation() != generation ||
+-            wake_engine_state() != WAKE_ENGINE_STATE_ACK_PLAYING) {
+-            audio_session_release(AUDIO_SESSION_OWNER_TALK);
++        if (!ack_lease || wake_engine_generation() != generation ||
++            !wake_engine_ack_protected(generation)) {
++            if (ack_lease) audio_session_release(AUDIO_SESSION_OWNER_TALK);
+             continue;
+         }
+ 
++        __atomic_store_n(&s_ack_playback_generation, generation, __ATOMIC_RELEASE);
+         size_t selected_index = wake_ack_select_index(esp_random(), previous_index);
+         const wake_ack_phrase_t *phrase = wake_ack_phrase_at(selected_index);
+         int64_t started_us = esp_timer_get_time();
+@@ -1351,22 +1365,10 @@
+         int64_t done_us = esp_timer_get_time();
+         if (ack_duplex) {
+             duplex_audio_end_playback();
+-            uint32_t near_generation = 0U;
+-            if (duplex_audio_take_near_speech(&near_generation)) {
+-                if (wake_engine_note_ack_speech(near_generation)) {
+-                    ESP_LOGI(TAG,
+-                             "wake:ack_near_speech generation=%u elapsed_us=%lld protected=1",
+-                             (unsigned)near_generation,
+-                             (long long)(done_us - started_us));
+-                } else {
+-                    ESP_LOGW(TAG,
+-                             "wake:ack_near_speech_stale expected_generation=%u actual_generation=%u",
+-                             (unsigned)generation,
+-                             (unsigned)near_generation);
+-                }
+-            }
+-        }
++        }
++        wake_engine_ack_playback_done(generation);
+         audio_session_release(AUDIO_SESSION_OWNER_TALK);
++        __atomic_store_n(&s_ack_playback_generation, 0U, __ATOMIC_RELEASE);
+ 
+         ESP_LOGI(TAG,
+                  "wake:ack_done generation=%u id=%s result=%s duration_us=%lld",
+@@ -1376,13 +1378,8 @@
+         if (result == WAKE_ACK_PLAY_OK) {
+             previous_index = selected_index;
+         }
+-        if (wake_engine_ack_complete(generation)) {
+-            listening_visual_request(true, generation);
+-            if (s_capture_task_handle != NULL) {
+-                xTaskNotifyGive(s_capture_task_handle);
+-            }
+-            notify_talk_task();
+-        }
++        if (s_capture_task_handle != NULL) xTaskNotifyGive(s_capture_task_handle);
++        notify_talk_task();
+         ESP_LOGI(TAG, "wake:ack_stack_high_water=%u bytes",
+                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
+     }
+@@ -1533,7 +1530,14 @@
+ static bool write_capture_checked(const int16_t *samples, size_t sample_count,
+                                   uint32_t generation)
+ {
+-    if (v2_capture_write(samples,sample_count,generation))return true;
++    bool input_retired = false;
++    if (v2_capture_write(samples,sample_count,generation,&input_retired))return true;
++    if (input_retired) {
++        /* Session/generation loss retires input, never cancels ACK as overflow.
++         * The generation-checked stop cannot affect a replacement capture. */
++        (void)audio_session_stop_capture(generation);
++        return false;
++    }
+     ESP_LOGE(TAG,"v2:capture_rejected generation=%lu",(unsigned long)generation);
+     wake_engine_report_capture_overflow(generation);
+     return false;
+@@ -1565,6 +1569,22 @@
+         ESP_LOGI(TAG,
+                  "wake:speech_capture_confirmed generation=%u ts_us=%lld",
+                  (unsigned)generation, (long long)ready_us);
++        notify_talk_task();
++    }
++}
++
++static void capture_ack_events(void)
++{
++    uint32_t generation = wake_engine_generation(), near_generation = 0;
++    if (!wake_engine_ack_protected(generation) &&
++        !wake_engine_ack_completion_pending(generation)) return;
++    if (duplex_audio_take_near_speech(&near_generation))
++        (void)wake_engine_note_ack_speech(near_generation);
++    prepare_wake_capture_if_ready();
++    if (wake_engine_ack_completion_pending(generation) &&
++        wake_engine_ack_complete(generation)) {
++        if (wake_engine_state() == WAKE_ENGINE_STATE_WAIT_SPEECH)
++            listening_visual_request(true, generation);
+         notify_talk_task();
+     }
+ }
+@@ -1672,6 +1692,7 @@
+             s_capture_fault = false;
+             /* Read a complete hardware record before declaring recovery. */
+         }
++        capture_ack_events();
+         wake_engine_state_t state = wake_engine_state();
+         if (!recovery_attempts && !audio_session_capture_active() && !wake_engine_available()) {
+             VD_SET(read_phase,5U);
+@@ -1690,7 +1711,8 @@
+                                WAKE_ENGINE_MODE_KEY &&
+                            audio_session_capture_active();
+         const bool duplex_capture =
+-            s_v2_output_active || s_v2_tail || state == WAKE_ENGINE_STATE_ACK_PLAYING ||
++            s_v2_output_active || s_v2_tail || wake_engine_ack_protected(wake_engine_generation()) ||
++            __atomic_load_n(&s_ack_playback_generation, __ATOMIC_ACQUIRE) != 0 ||
+             state == WAKE_ENGINE_STATE_PLAYING;
+         size_t capture_bytes =
+             key_capture
+@@ -1786,21 +1808,8 @@
+             }
+         }
+ 
+-        if (duplex_capture && state == WAKE_ENGINE_STATE_ACK_PLAYING) {
+-            uint32_t near_generation = 0U;
+-            if (duplex_audio_take_near_speech(&near_generation) &&
+-                wake_engine_note_ack_speech(near_generation)) {
+-                const int64_t elapsed_us = s_wake_confirmed_us > 0
+-                                               ? esp_timer_get_time() -
+-                                                     s_wake_confirmed_us
+-                                               : -1;
+-                ESP_LOGI(TAG,
+-                         "wake:ack_near_speech generation=%u elapsed_us=%lld protected=1",
+-                         (unsigned)near_generation,
+-                         (long long)elapsed_us);
+-            }
+-        } else if (duplex_capture &&
+-                   state == WAKE_ENGINE_STATE_PLAYING) {
++        capture_ack_events();
++        if (duplex_capture && state == WAKE_ENGINE_STATE_PLAYING) {
+             (void)handle_response_barge_in(wake_engine_generation());
+         }
+ 
+@@ -1883,18 +1892,6 @@
+             continue;
+         }
+         uint32_t generation = audio_session_capture_generation();
+-        while (!audio_session_acquire_playback(AUDIO_SESSION_OWNER_TALK)) {
+-            if (generation != audio_session_capture_generation() ||
+-                !audio_session_capture_confirmed()) {
+-                break;
+-            }
+-            vTaskDelay(1);
+-        }
+-        if (!audio_session_owner_is(AUDIO_SESSION_OWNER_TALK) ||
+-            generation != audio_session_capture_generation()) {
+-            audio_session_release(AUDIO_SESSION_OWNER_TALK);
+-            continue;
+-        }
+         ESP_LOGI(TAG, ">> TALK START");
+         const bool wake_round =
+             wake_engine_trigger_mode() == WAKE_ENGINE_MODE_WAKE;
+@@ -1902,7 +1899,9 @@
+         VD_INC(turn_begin);VD_SET(talk_phase,4U);
+         v2_voice_round(generation);
+         prepared_voice_http_cleanup(&prepared);
+-        audio_session_release(AUDIO_SESSION_OWNER_TALK);
++        /* Upload failure owns no playback lease. Let ACK finish its own cleanup
++         * before retiring this generation; cancellation still wakes ACK itself. */
++        wait_ack_cleanup(generation);
+         audio_session_complete_capture(generation);
+         const bool barge_in_pending =
+             wake_round && wake_engine_generation() == 0U &&
+--- before/voice_v2_runtime.inc
++++ v2/voice_v2_runtime.inc
+@@ -2,6 +2,8 @@
+  * object. All storage operations are short and serialized; no I/O under lock. */
+ static SemaphoreHandle_t s_v2_lock;
+ static v2_capture_t s_v2_capture;
++/* Protected by s_v2_lock. Recovery cannot revive input from a failed turn. */
++static uint32_t s_v2_retired_generation;
+ static char s_v2_session[33];
+ static bool s_v2_registered;
+ static service_origin_snapshot_t s_v2_origin;
+@@ -198,27 +200,30 @@
+         s_origin_cancel_requested?1U:0U,s_capture_fault?1U:0U,(unsigned long)cap_failed,(unsigned long)cap_gen,(unsigned long)cap_rev,slot,(unsigned long)slot_state);
+ }
+ #define VF_OP(n) (failure_op=(n))
+-#define VF_INVALIDATE(id,t,c,op,slot,prepared) v2_invalidate_session((id),(t),(c),(op),(slot),(prepared))
++#define VF_INVALIDATE(id,t,c,op,slot,prepared) v2_invalidate_session((id),(c)->generation,(t),(c),(op),(slot),(prepared))
+ #define VF_OPEN_NOTE(id,t,c,op) v2_failure_note((id),(t),(c),(op),-1,false,0,0,0,0,0)
+ #else
+ #define VF_OP(n) ((void)0)
+-#define VF_INVALIDATE(id,t,c,op,slot,prepared) v2_invalidate_session(id)
++#define VF_INVALIDATE(id,t,c,op,slot,prepared) v2_invalidate_session((id),(c)->generation)
+ #define VF_OPEN_NOTE(id,t,c,op) ((void)0)
+ #endif
+-static void v2_invalidate_session(const voice_v2_identity_t *id
++static void v2_invalidate_session(const voice_v2_identity_t *id, uint32_t generation
+ #ifdef VOICE_V2_FAILURE_DIAGNOSTICS
+     ,const voice_v2_transport_t *t,const v2_cancel_context_t *c,uint32_t op,int slot,bool prepared
+ #endif
+ )
+ {
+     xSemaphoreTake(s_v2_lock,portMAX_DELAY);
+-    bool current=id && id->origin.epoch==s_v2_origin.epoch &&
++    bool current=id && generation != 0 && generation==s_v2_bound_generation &&
++        generation==s_v2_capture.generation && id->turn==s_v2_turn &&
++        id->origin.epoch==s_v2_origin.epoch &&
+         id->origin.wifi_generation==s_v2_origin.wifi_generation && !strcmp(id->session,s_v2_session);
+ #ifdef VOICE_V2_FAILURE_DIAGNOSTICS
+     uint32_t cap_failed=s_v2_capture.failed,cap_gen=s_v2_capture.generation,cap_rev=s_v2_capture.revision;
+     uint32_t slot_state=slot>=0 && slot<2?s_v2_capture.slots[slot].state:UINT32_MAX;
+ #endif
+     if(current){
++        s_v2_retired_generation=generation;
+         s_v2_registered=false;
+         service_origin_session(&id->origin,false);
+     }
+@@ -226,7 +231,11 @@
+ #ifdef VOICE_V2_FAILURE_DIAGNOSTICS
+     v2_failure_note(id,t,c,op,slot,prepared,current?1U:0U,cap_failed,cap_gen,cap_rev,slot_state);
+ #endif
+-    if(current)origin_notify_background();
++    if(current) {
++        /* Input retirement is not a capture-capacity failure and owns no ACK lease. */
++        (void)audio_session_stop_capture(generation);
++        origin_notify_background();
++    }
+ }
+ static void v2_session_task(void *arg)
+ {
+@@ -322,7 +331,7 @@
+ {
+     if(!generation || !s_v2_lock || !s_v2_registered || !service_origin_current(&s_v2_origin))return false;
+     xSemaphoreTake(s_v2_lock,portMAX_DELAY);
+-    bool ok=s_v2_turn<UINT32_MAX;
++    bool ok=s_v2_turn<UINT32_MAX && s_v2_retired_generation!=generation;
+     if(ok && s_v2_bound_generation!=generation) {
+         v2_capture_reset(&s_v2_capture,generation);
+         s_v2_bound_generation=generation;
+@@ -332,11 +341,34 @@
+     ok=ok && !s_v2_capture.failed;
+     xSemaphoreGive(s_v2_lock);return ok;
+ }
+-static bool v2_capture_write(const int16_t *pcm,size_t count,uint32_t generation)
+-{
+-    if(!v2_bind(generation))return false;
+-    xSemaphoreTake(s_v2_lock,portMAX_DELAY);
+-    bool ok=s_v2_capture.generation==generation && v2_capture_append(&s_v2_capture,pcm,count);
++static bool v2_capture_input_retired(uint32_t generation)
++{
++    xSemaphoreTake(s_v2_lock,portMAX_DELAY);
++    bool current = generation != 0 && s_v2_bound_generation==generation &&
++                   s_v2_capture.generation==generation;
++    bool unavailable = !s_v2_registered || !service_origin_current(&s_v2_origin);
++    if (current && unavailable) s_v2_retired_generation=generation;
++    bool retired = !current || s_v2_retired_generation==generation || unavailable;
++    xSemaphoreGive(s_v2_lock);
++    return retired;
++}
++
++static bool v2_capture_write(const int16_t *pcm,size_t count,uint32_t generation,
++                             bool *input_retired)
++{
++    if(!v2_bind(generation)) {
++        if(input_retired)*input_retired=v2_capture_input_retired(generation);
++        return false;
++    }
++    xSemaphoreTake(s_v2_lock,portMAX_DELAY);
++    bool current=s_v2_bound_generation==generation && s_v2_capture.generation==generation;
++    bool unavailable=!s_v2_registered || !service_origin_current(&s_v2_origin);
++    if(current && unavailable)s_v2_retired_generation=generation;
++    bool retired=!current || s_v2_retired_generation==generation || unavailable;
++    bool ok=!retired && v2_capture_append(&s_v2_capture,pcm,count);
++    /* Classify the actual append attempt under the same lock. A later network
++     * invalidation must not relabel an already observed capacity failure. */
++    if(input_retired)*input_retired=retired;
+     xSemaphoreGive(s_v2_lock);notify_talk_task();return ok;
+ }
+ static void v2_preconnect(uint32_t generation)
+@@ -589,6 +621,25 @@
+          wake_engine_state()==WAKE_ENGINE_STATE_UPLOADING && wake_engine_generation()==generation));
+     xSemaphoreGive(s_v2_lock);return continued;
+ }
++/* Called only at the response boundary, never before input upload. */
++static bool v2_receive_with_lease(voice_v2_transport_t *transport,
++                                  v2_cancel_context_t *cancel)
++{
++    bool leased = false;
++    while (!v2_cancelled(cancel)) {
++        if (!ack_cleanup_pending(cancel->generation) &&
++            audio_session_acquire_playback(AUDIO_SESSION_OWNER_TALK)) {
++            leased = true;
++            break;
++        }
++        ulTaskNotifyTake(pdTRUE, 1);
++    }
++    if (!leased) return false;
++    bool done = !v2_cancelled(cancel) && v2_receive(transport, cancel);
++    audio_session_release(AUDIO_SESSION_OWNER_TALK);
++    return done;
++}
++
+ static void v2_voice_round(uint32_t generation)
+ {
+     if(!v2_bind(generation))return;
+@@ -651,7 +702,7 @@
+                 }
+             }
+             if(ok && !limit) {
+-                bool done=v2_receive(&transport,&cancel);
++                bool done=v2_receive_with_lease(&transport,&cancel);
+                 voice_v2_close(&transport);
+                 if(done || wake_engine_should_cancel(generation))return;
+                 bool continued=v2_input_continued(generation,id.revision);
