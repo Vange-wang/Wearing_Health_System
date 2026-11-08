@@ -72,6 +72,7 @@ class VoiceV2Service:
             raise ValueError('v2 only permits tool-free DeepSeek and bounded MiMo ASR')
         self.turn_asr=TurnASR(asr)
         self.asr,self.model,self.tts,self.weather=asr,model,tts,weather
+        self.weather_search = OpenMeteoWeatherSearch() if weather else None
         self.web_search = web_search
         self.search_ack = search_ack
         self.store=TurnStore(TurnHistory(),limits)
@@ -118,7 +119,7 @@ class VoiceV2Service:
         model.direct_weather_configured=self.weather
         backend=model
         if self.weather:
-            backend=WeatherRouteCandidate(model,model,OpenMeteoWeatherSearch(),enabled=True,general_locations=True)
+            backend=WeatherRouteCandidate(model,model,self.weather_search,enabled=True,general_locations=True)
         weather_request=self.weather and backend.handles_current_weather(text)
         if is_write_request(text):backend=PendingAction(history)
         elif self.web_search and not weather_request and needs_agent_check(text):

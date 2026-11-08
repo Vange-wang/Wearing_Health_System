@@ -78,11 +78,13 @@ class WeatherDNS:
     def __init__(self,clock=time.monotonic,query=public_query):
         self.clock,self.query=clock,query;self.lock=threading.Lock()
         self.addresses=();self.expires=0;self.thread=None;self.stop=threading.Event()
+        self.first_answer=threading.Event()
     def refresh(self):
         for server in SERVERS:
             try:addresses,ttl=self.query(server)
             except (OSError,ValueError,UnicodeError):continue
             with self.lock:self.addresses=addresses;self.expires=self.clock()+min(ttl,3600)
+            self.first_answer.set()
             return min(ttl/2,60)
         return 5
     def cached(self,host):
@@ -97,7 +99,7 @@ class WeatherDNS:
     def start(self):
         with self.lock:
             if self.thread is not None and self.thread.is_alive():return
-            self.stop.clear();self.thread=threading.Thread(target=self._run,name='weather-dns-refresh',daemon=True)
+            self.first_answer.clear();self.stop.clear();self.thread=threading.Thread(target=self._run,name='weather-dns-refresh',daemon=True)
             self.thread.start()
     def close(self):
         self.stop.set()

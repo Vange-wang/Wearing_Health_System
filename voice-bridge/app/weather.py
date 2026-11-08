@@ -1,5 +1,6 @@
 """A5 current-weather model estimate; no search snippets or LLM calls."""
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -10,7 +11,7 @@ import threading
 import time
 import httpx
 from .http_stream_transport import current_scope
-from .weather_dns import weather_transport
+from .weather_dns import weather_transport, cache as weather_dns_cache
 from .llm import LLMBase
 from .weather_intent import classify, CLARIFY, UNSUPPORTED
 from .weather_location import resolve_location, LocationClarification
@@ -107,23 +108,64 @@ def observation(data,city,now,coordinates=None):
         raise WeatherFailure('invalid_data') from None
 
 class OpenMeteoWeatherSearch(WeatherSearch):
+    def __init__(self):
+        self._observations = OrderedDict()
+        self._lock = threading.Lock()
+
+    def _cached(self, city, now):
+        with self._lock:
+            entry = self._observations.get(city)
+        if entry is None:
+            return None
+        saved, label, coordinates, data = entry
+        if time.monotonic() - saved >= 300:
+            return None
+        try:
+            return observation(data, label, now, coordinates)
+        except WeatherFailure:
+            return None
+
     def search(self,city,now):
         deadline=None
         try:
             with SearchDeadline() as deadline:
-                deadline.check();coordinates=CITIES.get(city);label=city
+                deadline.check()
+                cached = self._cached(city, now)
+                if cached is not None:
+                    return cached
+                coordinates=CITIES.get(city);label=city
                 with httpx.Client(trust_env=False,verify=True,follow_redirects=False,
-                    timeout=httpx.Timeout(15,connect=3),transport=weather_transport()) as client:
-                    if coordinates is None:label,coordinates=resolve_location(client,deadline,city)
-                    lat,lon=coordinates
-                    with client.stream('GET',URL,params={'latitude':lat,'longitude':lon,
-                        'current':'temperature_2m,weather_code,is_day','timezone':'auto','forecast_days':1}) as response:
-                        response.raise_for_status();body=bytearray()
-                        for chunk in response.iter_bytes():
-                            deadline.check();body.extend(chunk)
-                            if len(body)>64000:raise WeatherFailure('invalid_data')
-                        data=json.loads(body)
-                deadline.check();return observation(data,label,now,coordinates)
+                    timeout=httpx.Timeout(5,connect=3),transport=weather_transport()) as client:
+                    for attempt in range(2):
+                        deadline.check()
+                        try:
+                            if coordinates is None:
+                                label,coordinates=resolve_location(client,deadline,city)
+                            lat,lon=coordinates
+                            with client.stream('GET',URL,params={'latitude':lat,'longitude':lon,
+                                'current':'temperature_2m,weather_code,is_day','timezone':'auto','forecast_days':1}) as response:
+                                response.raise_for_status();body=bytearray()
+                                for chunk in response.iter_bytes():
+                                    deadline.check();body.extend(chunk)
+                                    if len(body)>64000:raise WeatherFailure('invalid_data')
+                                data=json.loads(body)
+                            break
+                        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                            deadline.check()
+                            if attempt:
+                                raise
+                            if coordinates is None and 'weather DNS not ready' in str(exc):
+                                weather_dns_cache.first_answer.wait(min(2, max(0, deadline.end-time.monotonic())))
+                                deadline.check()
+                            logger.info('weather_retry stage=%s', 'forecast' if coordinates else 'location')
+                deadline.check()
+                result = observation(data,label,now,coordinates)
+                with self._lock:
+                    self._observations[city] = (time.monotonic(),label,coordinates,data)
+                    self._observations.move_to_end(city)
+                    if len(self._observations)>64:
+                        self._observations.popitem(last=False)
+                return result
         except (SearchCancelled,LocationClarification):raise
         except Exception as exc:
             parent=deadline.parent if deadline is not None else current_scope.get()
