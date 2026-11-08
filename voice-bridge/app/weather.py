@@ -90,15 +90,17 @@ def observation(data,city,now,coordinates=None):
         lat,lon=coordinates if coordinates is not None else CITIES[city];a=data['latitude'];b=data['longitude']
         # Grid-centre tolerance: at most about 11 km per axis.
         if not finite(a) or not finite(b) or abs(a-lat)>0.1 or abs(b-lon)>0.1:raise ValueError()
-        if data['timezone']!='Asia/Singapore' or type(data['utc_offset_seconds']) is not int or data['utc_offset_seconds']!=28800:raise ValueError()
+        offset=data['utc_offset_seconds']
+        if type(offset) is not int or abs(offset)>14*3600 or not data['timezone']:raise ValueError()
+        location_zone=timezone(timedelta(seconds=offset))
         units=data['current_units']
         if any(units.get(k)!=v for k,v in {'time':'iso8601','temperature_2m':'°C','weather_code':'wmo code','is_day':''}.items()):raise ValueError()
         current=data['current'];temp=current['temperature_2m'];code=current['weather_code'];day=current['is_day']
         if not finite(temp) or not -90<=temp<=65 or type(code) is not int or str(code) not in CONDITIONS or type(day) is not int or day not in (0,1):raise ValueError()
         stamp=current['time']
         if not isinstance(stamp,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}',stamp):raise ValueError()
-        updated=datetime.strptime(stamp,'%Y-%m-%dT%H:%M').replace(tzinfo=ZONE)
-        local=now.astimezone(ZONE);age=(local-updated).total_seconds()
+        updated=datetime.strptime(stamp,'%Y-%m-%dT%H:%M').replace(tzinfo=location_zone)
+        local=now.astimezone(location_zone);age=(local-updated).total_seconds()
         if updated.date()!=local.date() or not 0<=age<=3600:raise ValueError()
         return {'city':city,'temp_c':temp,'condition':CONDITIONS[str(code)],'time':stamp,'source':'Open-Meteo','model_estimate':True}
     except (KeyError,TypeError,ValueError,AttributeError,OverflowError):
@@ -115,7 +117,7 @@ class OpenMeteoWeatherSearch(WeatherSearch):
                     if coordinates is None:label,coordinates=resolve_location(client,deadline,city)
                     lat,lon=coordinates
                     with client.stream('GET',URL,params={'latitude':lat,'longitude':lon,
-                        'current':'temperature_2m,weather_code,is_day','timezone':'Asia/Singapore','forecast_days':1}) as response:
+                        'current':'temperature_2m,weather_code,is_day','timezone':'auto','forecast_days':1}) as response:
                         response.raise_for_status();body=bytearray()
                         for chunk in response.iter_bytes():
                             deadline.check();body.extend(chunk)
@@ -161,7 +163,7 @@ class WeatherRouteCandidate(LLMBase):
     def chat(self,text):return self.hermes.chat(text)
     def _intent(self,text):
         history=()
-        if len(text)<20 and any(city in text for city in self.cities):
+        if len(text)<40 and (self.general_locations or any(city in text for city in self.cities)):
             history=self.conversation_history.snapshot()
         return classify(text,self.cities,history,allow_general=self.general_locations) if self.enabled else None
     def handles_current_weather(self,text):return self._intent(text) is not None
@@ -185,7 +187,7 @@ class WeatherRouteCandidate(LLMBase):
                     data=self.search.search(city,self.clock());check()
                     hour,minute=data['time'][11:16].split(':')
                     answer=(f"{data['city']}当前天气模型估计约{data['temp_c']:g}摄氏度，{data['condition']}。"
-                            f"数据时间{int(hour)}点{int(minute)}分，来源Open-Meteo。")
+                            f"当地{data['time'][5:7]}月{data['time'][8:10]}日{int(hour)}点{int(minute)}分，来源Open-Meteo。")
                     successful[0]=True;stats['weather_status']='success'
                 except SearchCancelled:raise
                 except LocationClarification as exc:

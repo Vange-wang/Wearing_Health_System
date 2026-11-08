@@ -1,6 +1,7 @@
 """V2 voice adapter with bounded read-only weather and public web lookup."""
 import asyncio
 import copy
+import re
 import time
 from types import SimpleNamespace
 from .llm import ConversationHistory, TOOL_SENTINEL
@@ -16,6 +17,13 @@ from .stream_resources import OwnedSyncStream
 
 WRITE_INTENTS=('发消息','发邮件','发送','支付','购买','下单','删除','修改文件','写入','创建提醒','设置闹钟','订票','转账','上传','发布')
 PENDING_ACTION='这项操作需要在完整发言确认后另行提交，当前没有执行。'
+
+def is_write_request(text):
+    # Read-only questions about a release share the verb with publishing commands.
+    if "发布" in text and not re.search(r"(?:帮我|替我|给我|请你|请帮忙|我要|我想).{0,8}发布", text):
+        text = re.sub(r"发布(?=了什么|了哪些|了吗|的(?:消息|新闻|公告|版本)|会|日期|时间)", "", text)
+    return any(word in text for word in WRITE_INTENTS)
+
 
 class PendingAction:
     name='pending_action'
@@ -112,7 +120,7 @@ class VoiceV2Service:
         if self.weather:
             backend=WeatherRouteCandidate(model,model,OpenMeteoWeatherSearch(),enabled=True,general_locations=True)
         weather_request=self.weather and backend.handles_current_weather(text)
-        if any(word in text for word in WRITE_INTENTS):backend=PendingAction(history)
+        if is_write_request(text):backend=PendingAction(history)
         elif self.web_search and not weather_request and needs_agent_check(text):
             model.public_web_configured = True
             backend = CheckedChat(model)

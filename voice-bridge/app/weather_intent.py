@@ -2,7 +2,7 @@
 import re
 CLARIFY='你想查询哪个城市现在的天气？'
 UNSUPPORTED='目前已核验的当前天气地点是新加坡、北京和上海。请明确其中一个城市；其他地点尚未完成可靠匹配，我不会猜测天气。'
-_PREFIX=re.compile(r'^(?:你好[，,]?|您好[，,]?|请问|麻烦你?|请你?|能不能帮我|可以帮我|能帮我|帮我|替我|给我|我想知道|我想了解|我想查|查询一下|查询|查一下|查查|查|看一下|看看|告诉我)+')
+_PREFIX=re.compile(r'^(?:你好[，,]?|您好[，,]?|请问|麻烦你?|请你?|能不能帮我|可以帮我|能帮我|帮我|替我|给我|我想知道|我想了解|我想查|联网查一下|联网查询|联网查|查询一下|查询|查一下|查查|查|看一下|看看|告诉我)+')
 _TIME=re.compile(r'(?:今天|现在|当前|此刻|今日)')
 _SUFFIX=re.compile(r'(?:怎么样|如何|是多少|多少度|几度|什么情况|情况|状况|好不好)?(?:呢|呀|啊|吗|吧)?[？?。！!]*$')
 _KNOWLEDGE=('为什么','原理','是什么','定义','区别','形成','怎么预测','如何预测','一般','通常','季节','明天','后天','昨天','下周','未来','一周')
@@ -19,7 +19,8 @@ def classify(text,cities,history=(),*,allow_general=False):
     if allow_general and re.fullmatch(r'[\u4e00-\u9fffA-Za-z，, -]{2,40}',short):
         last=history[-1] if history else {}
         reply=last.get('content','') if last.get('role')=='assistant' else ''
-        if reply==CLARIFY or reply.startswith(('这个城市有多个同名地点','暂时无法唯一匹配这个地点','请提供城市名称')):
+        if ('当前天气模型估计' in reply and re.search(r'(?:的|呢)[？?。！!]*$', value)
+                and not any(w in short for w in ('天气','气温','温度','怎么','什么','为什么','心率','血氧'))) or reply==CLARIFY or reply.startswith(('这个城市有多个同名地点','暂时无法唯一匹配这个地点','请提供城市名称')):
             return short
     if short in cities:
         last=history[-1] if history else {}
