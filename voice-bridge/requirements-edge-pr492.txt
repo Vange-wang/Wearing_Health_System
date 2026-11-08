@@ -1,0 +1,1 @@
+vendor/edge_tts-7.2.8+pr492.ba61d944.direct1-py3-none-any.whl --hash=sha256:13aaf4484f4d847e29db4055825216a6715711b427683579cb063cd1ce65e239
