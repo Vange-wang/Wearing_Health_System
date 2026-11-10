@@ -63,6 +63,7 @@ class Turn:
     expected_tx_bytes: int = 0
     output_generation: int = 0
     response_claim_revision: int = 0
+    search_ui_revision: int = 0
     draft: tuple = None
     event_seq: int = 0
     last_event: tuple = None

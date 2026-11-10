@@ -106,6 +106,10 @@ def decode_frame(data: bytes) -> tuple[bytes, bytes]:
     return data[4 : 4 + n], data[4 + n :]
 
 
+SEARCH_STARTED = object()
+SEARCH_FINISHED = object()
+
+
 class StreamingPipeline:
     """串联 VAD/ASR/LLM流/分句/TTS，产出长度前缀帧流。"""
 
@@ -731,6 +735,8 @@ class StreamingPipeline:
                     if delta is TOOL_SENTINEL:
                         logger.info("produce: 收到 TOOL_SENTINEL（工具调用），comfort_queued=%s", comfort_queued)
                         # 慢路径哨兵（工具调用）→ 安抚语优先合成（A5）
+                        if getattr(timing, "search_ui", False) and "web_search_status" in request_stats:
+                            await frame_queue.put((None, "search_started"))
                         if not comfort_queued:
                             web_lookup = "web_search_status" in request_stats
                             if caption_texts is not None and web_lookup:
@@ -792,11 +798,17 @@ class StreamingPipeline:
         total_frames = 0
         last_audio_yield_at = None
         prev_is_end = True  # 首帧前不加停顿
+        search_visible = getattr(timing, "weather_search_ui", False)
         producer_done = False
         workers_done = 0
         while True:
             item = await frame_queue.get()
             if item[0] is None:
+                if item[1] == "search_started":
+                    if not search_visible:
+                        search_visible = True
+                        yield SEARCH_STARTED
+                    continue
                 if item[1] == "worker_cancelled":
                     raise asyncio.CancelledError
                 if item[1] == "producer_done":
@@ -847,6 +859,9 @@ class StreamingPipeline:
                         timing[first_key] = round((time.perf_counter() - timing.audio_start_perf) * 1000)
                     last_audio_yield_at = time.perf_counter()
                     yield frame
+                    if search_visible and kind != "comfort":
+                        search_visible = False
+                        yield SEARCH_FINISHED
                     # First audio has already been yielded. Caption encoding
                     # never runs before that first audio delivery boundary.
                     if caption_texts is not None:

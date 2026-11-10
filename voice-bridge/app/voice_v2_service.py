@@ -10,7 +10,7 @@ from .mimo_llm import DeepSeekVoiceLLM
 from .mimo_asr import MiMoBufferedASR
 from .turn_asr import TurnASR
 from .weather import WeatherRouteCandidate, OpenMeteoWeatherSearch
-from .pipeline import StreamingPipeline, TimingRecord
+from .pipeline import SEARCH_STARTED, StreamingPipeline, TimingRecord
 from .router import LIGHTWEIGHT
 from .voice_turn import TurnStore, Limits, TurnError
 from .stream_resources import OwnedSyncStream
@@ -120,8 +120,10 @@ class VoiceV2Service:
         backend=model
         if self.weather:
             backend=WeatherRouteCandidate(model,model,self.weather_search,enabled=True,general_locations=True)
-        weather_request=self.weather and backend.handles_current_weather(text)
-        if is_write_request(text):backend=PendingAction(history)
+        weather_target = backend.weather_target(text) if self.weather else None
+        weather_request = weather_target is not None
+        write_request = is_write_request(text)
+        if write_request:backend=PendingAction(history)
         elif self.web_search and not weather_request and needs_agent_check(text):
             model.public_web_configured = True
             backend = CheckedChat(model)
@@ -137,10 +139,14 @@ class VoiceV2Service:
                                comfort_text="正在搜索。", acknowledgements={"web_search": self.search_ack})
         self.outcome('answer','running')
         timing=TimingRecord();timing.captions_enabled=True;timing.private_input=True
+        timing.search_ui = getattr(turn,"search_ui_revision",0) == revision
+        timing.weather_search_ui = timing.search_ui and bool(weather_target) and weather_target != "?" and not write_request
         gen=pipe.run_text(text,timing)
         quiescent=asyncio.Event()
         self.store.output_leases[lease]=quiescent
         try:
+            if timing.weather_search_ui:
+                yield SEARCH_STARTED
             async for data in gen:
                 if not self.store.current(turn,revision):raise TurnError('stale_revision')
                 yield data

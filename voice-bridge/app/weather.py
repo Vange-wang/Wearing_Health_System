@@ -208,7 +208,8 @@ class WeatherRouteCandidate(LLMBase):
         if len(text)<40 and (self.general_locations or any(city in text for city in self.cities)):
             history=self.conversation_history.snapshot()
         return classify(text,self.cities,history,allow_general=self.general_locations) if self.enabled else None
-    def handles_current_weather(self,text):return self._intent(text) is not None
+    def weather_target(self,text):return self._intent(text)
+    def handles_current_weather(self,text):return self.weather_target(text) is not None
     def stream_chat(self,text):
         city=self._intent(text)
         if city is None:return self.hermes.stream_chat(text)

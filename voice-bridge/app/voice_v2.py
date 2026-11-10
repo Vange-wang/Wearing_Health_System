@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request, HTTPException
 from starlette.responses import StreamingResponse, JSONResponse
 from .device_auth import require_device_token
 from .audio_input import bounded_chunks, AudioInputTooLarge, AudioInputIdleTimeout
+from .pipeline import SEARCH_STARTED, SEARCH_FINISHED
 from .voice_turn import TurnError
 from .tx_audio_quantity import stereo_output_bytes
 
@@ -71,11 +72,13 @@ def make_router(resolve):
         if value is None: raise HTTPException(503,'v2 disabled')
         return value
 
-    def respond(svc,turn,session,number,revision,seq):
+    def respond(request,svc,turn,session,number,revision,seq):
         store=svc.store
         if turn.response_claim_revision == revision:
             return JSONResponse({"status":"duplicate","segment":seq})
         turn.response_claim_revision=revision
+        if request.headers.get("x-voice-search-ui") == "1":
+            turn.search_ui_revision=revision
         async def body():
             task=asyncio.current_task()
             if len(store.outputs)>=2:
@@ -91,6 +94,9 @@ def make_router(resolve):
                 yield packet(b'M',meta)
                 async for data in svc.answer(text,turn,revision):
                     if not store.current(turn,revision):return
+                    if data is SEARCH_STARTED or data is SEARCH_FINISHED:
+                        yield packet(b'M', b'{"search":true}' if data is SEARCH_STARTED else b'{"search":false}')
+                        continue
                     turn.expected_tx_bytes+=stereo_output_bytes(data)
                     turn.frame_count+=1
                     yield packet(b'F',struct.pack('!I',turn.frame_count)+data)
@@ -156,7 +162,7 @@ def make_router(resolve):
             if seg.reason=='segment_limit':
                 return JSONResponse({'status':'segment_accepted','segment':seq})
 
-            return respond(svc,turn,session,number,revision,seq)
+            return respond(request,svc,turn,session,number,revision,seq)
         except TurnError as exc:
             if turn is not None and seg is not None and not duplicate and not seg.complete:store.retire(turn,exc.code)
             if exc.status == 409:
@@ -189,7 +195,7 @@ def make_router(resolve):
                 or seg is None or not seg.complete or seg.reason!='segment_limit'
                 or seg.start!=start or seg.revision!=revision):raise TurnError('invalid_commit')
             if type(data['samples']) is not int or (data['samples'],data['sha256'])!=(seg.samples,seg.digest):raise TurnError('segment_digest',400)
-            return respond(svc,turn,session,number,revision,seq)
+            return respond(request,svc,turn,session,number,revision,seq)
         except TurnError as exc:raise HTTPException(exc.status,exc.code) from None
         except (AudioInputTooLarge,AudioInputIdleTimeout):raise HTTPException(413,'commit_body_limit') from None
         except (ValueError,TypeError,KeyError):raise HTTPException(400,'invalid_commit') from None
