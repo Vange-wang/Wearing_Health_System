@@ -131,11 +131,18 @@ void caption_ui_init(void)
     runner=lv_obj_create(lv_scr_act());
     if(runner) {
         lv_obj_remove_style_all(runner);
-        lv_obj_set_size(runner,192,66);
-        lv_obj_set_pos(runner,64,144);
+        lv_obj_set_size(runner,192,90);
+        lv_obj_set_pos(runner,64,128);
         lv_obj_clear_flag(runner,LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(runner,LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_event_cb(runner,draw_runner,LV_EVENT_DRAW_MAIN,NULL);
+        lv_obj_t *message=lv_label_create(runner);
+        if(message) {
+            lv_obj_set_style_text_font(message,&box_caption_font,0);
+            lv_obj_set_style_text_color(message,lv_obj_get_style_text_color(label,0),0);
+            lv_label_set_text_static(message,"正在搜索...");
+            lv_obj_align(message,LV_ALIGN_TOP_MID,0,1);
+        }
     }
 }
 
