@@ -1,0 +1,18 @@
+{
+  "status": "UNINSTALLED_LIMITED_DEVICE_TEST_CANDIDATE",
+  "baseline_commit": "64bc1b994f0a7ee1dd1e2139800acf0e25c4eb23",
+  "baseline_firmware_path": "recovery/box3/2026-11-10-running/firmware",
+  "candidate_app_sha256": "9275d9899897c5e4e9e42f8fadd1f15e134d89fd27902e5b11b9baee242c78c8",
+  "candidate_app_size": 3070672,
+  "source_sha256": {
+    "recovery/box3/2026-11-11-wake-upload-candidate/firmware/main/voice_agent.c": "e713645028c98c49630a735801ea0808c0a664341bd263de65fb09bc33bc1a6b",
+    "recovery/box3/2026-11-11-wake-upload-candidate/firmware/main/voice_v2_runtime.inc": "f8e7655bde2d04231157878e832031a9922d35664a20d332700ca191eb98029e"
+  },
+  "acceptance": "Host fault-injection and local build only. Real startup, complex audio, repeated playback, BLE, display and first-word latency pending.",
+  "review_conditions": [
+    "Clarify empty-response behavior after continuation",
+    "Add/verify barge-in diagnostics",
+    "Run real playback and end-to-end latency comparisons"
+  ],
+  "reproducibility": "Uses existing local SDK and build base; clean checkout rebuild has not been verified."
+}
