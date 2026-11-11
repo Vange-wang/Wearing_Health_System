@@ -24,3 +24,7 @@ Thumbs.db
 
 # 临时目录
 .tmp*/
+/.env.cloud-tts
+
+# Local SDKs, models, builds, diagnostics and temporary audit material
+/.work/
