@@ -13,7 +13,7 @@ cffi==2.1.1
 click==8.4.2
 colorama==0.4.6
 distro==1.9.0
-edge-tts==7.2.8
+-r requirements-edge-731.txt  # fixed project wheel; run pip from voice-bridge
 fastapi==0.141.1
 flatbuffers==25.12.19
 frozenlist==1.8.0

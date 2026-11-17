@@ -29,7 +29,9 @@ class ASRBase(ABC):
 def read_wav_16k_mono(wav_path: Path, sample_rate: int = 16000) -> np.ndarray:
     """读取并校验 WAV 为 float32 [-1,1]；格式不符/损坏抛 ValueError（由上层映射错误码）。"""
     try:
-        with wave.open(str(wav_path), "rb") as w:
+        if hasattr(wav_path, "read"):
+            wav_path.seek(0)
+        with wave.open(wav_path if hasattr(wav_path, "read") else str(wav_path), "rb") as w:
             nch = w.getnchannels()
             sw = w.getsampwidth()
             fr = w.getframerate()
@@ -90,6 +92,11 @@ class SherpaOnnxASR(ASRBase):
 
 def create_asr(cfg) -> ASRBase:
     """工厂：按 config 创建 ASR 实例（当前仅 sherpa-onnx，换引擎改这里）。"""
+    if getattr(cfg, "asr_engine", "sherpa") == "mimo":
+        if cfg.asr_sample_rate != 16000:
+            raise ASRModelLoadError("MiMo ASR requires 16000 Hz")
+        from .mimo_asr import MiMoBufferedASR
+        return MiMoBufferedASR(min(cfg.pipeline_max_input_bytes, int(cfg.asr_sample_rate * 2 * cfg.pipeline_max_input_seconds), 480000), cfg.asr_mimo_timeout)
     return SherpaOnnxASR(cfg.asr_model_dir, cfg.asr_sample_rate)
 
 
@@ -166,4 +173,9 @@ class StreamingASR:
 
 
 def create_streaming_asr(cfg) -> StreamingASR:
+    if getattr(cfg, "asr_engine", "sherpa") == "mimo":
+        if cfg.asr_sample_rate != 16000:
+            raise ASRModelLoadError("MiMo ASR requires 16000 Hz")
+        from .mimo_asr import MiMoBufferedASR
+        return MiMoBufferedASR(min(cfg.pipeline_max_input_bytes, int(cfg.asr_sample_rate * 2 * cfg.pipeline_max_input_seconds), 480000), cfg.asr_mimo_timeout)
     return StreamingASR(cfg.asr_streaming_model_dir, cfg.asr_sample_rate)

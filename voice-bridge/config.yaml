@@ -5,22 +5,32 @@ device_auth:
   mode: required
   token_env: DEVICE_TOKEN
 asr:
+  engine: "sherpa"
+  mimo_timeout: 15
   model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
   sample_rate: 16000
   streaming_model_dir: models/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
 tts:
-  primary: edge
+  primary: "edge"
+  mimo_voice: 茉莉
+  mimo_timeout: 15
+  probe_timeout: 15
   edge_voice: zh-CN-XiaoxiaoNeural
+  edge_rate: +5%
+  edge_pitch: +3Hz
   edge_probe_timeout: 3
+  edge_proxy: ""
 vad:
   enabled: true
   rms_threshold: 0.005
   min_speech_frames: 10
 llm:
+  engine: hermes
   api_server_url: http://127.0.0.1:8780/v1
   model: hermes-agent
   api_key_env: HERMES_API_KEY
 lightweight:
+  engine: deepseek
   base_url: https://api.deepseek.com
   model: deepseek-chat
   api_key_env: DEEPSEEK_API_KEY
@@ -65,7 +75,24 @@ health:
   # P4 微信预警推送：接收方为子女/监护人微信（hermes send -t weixin:<chat_id>）
   wechat_chat_id: ""  # local env only
   wechat_chat_id_env: WECHAT_CHAT_ID
-  wechat_push_enabled: true
+  wechat_push_enabled: false
   wechat_daily_limit: 5
 log:
   level: INFO
+
+# A5 candidate: current weather model estimates only; default off.
+weather_fast_path:
+  enabled: true
+  cities: [新加坡, 北京, 上海]
+
+# B3 candidate only: disabled until paired firmware and independent acceptance.
+voice_v2:
+  enabled: true
+  web_search: true
+  # Preloaded at startup, never load a local model on the first user request.
+  asr_engine: "sensevoice"
+  seconds: 120
+  segments: 16
+  chars: 8000
+  pending: 2
+  ttl: 120

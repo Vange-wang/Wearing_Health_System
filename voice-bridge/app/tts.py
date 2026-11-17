@@ -12,9 +12,11 @@ import socket
 import ssl
 import wave
 from abc import ABC, abstractmethod
+from contextlib import aclosing
 
 import aiohttp
 import certifi
+from .edge_connection import owned_communicate
 
 # vendored 最小协议（方向1 预连接）：复用 edge-tts 内部的 wire 协议函数，
 # 只做「建 WSS + 发 speech.config」，把「发 ssml」推迟到首句到达，与 LLM 生成并行。
@@ -139,6 +141,12 @@ class _EdgePreconnect:
         self._session = session
         self._ws = ws
         self._tts_config = tts_config
+        self._closed = False
+        self._close_task = None
+        self._close_steps = {}
+        self._step_closed = set()
+        self._close_callbacks = []
+        self._close_timeout = 2.0  # cleanup only; no change to synthesis timeouts
 
     def _wire_ssml(self, text: str) -> str:
         # 与 edge_tts.Communicate.__init__ 相同的文本处理链（escape + 去不兼容字符 + 分片）
@@ -192,12 +200,7 @@ class _EdgePreconnect:
                     if params.get(b"Path") == b"turn.end":
                         break
         except Exception as e:
-            # 对齐原版：首段未产出即失败 → 抛 TTSError（上层 _drain_stream 捕获后回退用时建连）；
-            # 已发部分帧后失败 → 静默结束（已发帧照常播放）
-            if emitted == 0:
-                raise TTSError(f"edge 预连接流式合成失败: {e}") from e
-            logger.warning("edge 预连接流式中途失败（已发 %d samples，已发帧不受影响）: %s", emitted, e)
-            return
+            raise TTSError(f"edge 预连接流式合成失败: {type(e).__name__}") from None
         # flush 剩余（含整句不足首段阈值的情况）
         if mp3_buf:
             try:
@@ -211,19 +214,77 @@ class _EdgePreconnect:
                 if len(full) > emitted:
                     yield wrap_pcm_as_wav(full[emitted:].tobytes(), 16000)
             except Exception as e:
-                logger.warning("edge 预连接流式 flush 解码失败: %s", e)
+                raise TTSError(f"edge 预连接流式 flush 解码失败: {type(e).__name__}") from None
         if not got_audio:
             raise TTSError("edge 预连接未收到音频")
 
     async def close(self) -> None:
+        if self._closed:
+            return
+        if self._close_task is None or self._close_task.done():
+            self._close_task = asyncio.create_task(self._close_impl())
+            self._close_task.add_done_callback(self._close_done)
+        await asyncio.shield(self._close_task)
+
+    @property
+    def quiescent(self):
+        return self._closed and all(task.done() for task in self._close_steps.values())
+
+    def when_quiescent(self, callback):
+        self._close_callbacks.append(callback)
+        self._notify_close()
+
+    def _notify_close(self):
+        if self.quiescent:
+            callbacks, self._close_callbacks = self._close_callbacks, []
+            for callback in callbacks:
+                callback()
+
+    def _close_done(self, task):
+        if not task.cancelled():
+            failure = task.exception()  # observe abandoned caller's cleanup failure
+            if failure is None:
+                for name, step in self._close_steps.items():
+                    if step is task:
+                        self._step_closed.add(name)
+                self._closed = len(self._step_closed) == 2
+        self._notify_close()
+
+    async def _close_step(self, name, resource):
+        if name in self._step_closed:
+            return
+        task = self._close_steps.get(name)
+        if task is not None and task.done() and not task.cancelled() and task.exception() is None:
+            self._step_closed.add(name)
+            return
+        if task is None or task.done():
+            task = asyncio.create_task(resource.close())
+            self._close_steps[name] = task
+            task.add_done_callback(self._close_done)
+        done, _ = await asyncio.wait({task}, timeout=self._close_timeout)
+        if not done:
+            task.cancel()
+            # Do not join a third-party close that ignores cancellation. Keep
+            # the actual task visible; it is not a completed resource/lease.
+            raise TimeoutError(f"edge {name} cleanup pending")
+        task.result()
+        self._step_closed.add(name)
+
+    async def _close_impl(self):
+        failure = None
         try:
-            await self._ws.close()
-        except Exception:
-            pass
+            await self._close_step("ws", self._ws)
+        except BaseException as exc:
+            failure = exc
         try:
-            await self._session.close()
-        except Exception:
-            pass
+            await self._close_step("session", self._session)
+        except BaseException as exc:
+            if failure is None:
+                failure = exc
+        self._closed = len(self._step_closed) == 2
+        self._notify_close()
+        if failure is not None:
+            raise failure
 
 
 class EdgeTTS(TTSBase):
@@ -234,10 +295,14 @@ class EdgeTTS(TTSBase):
         voice: str = "zh-CN-XiaoxiaoNeural",
         rate: str = "-5%",
         pitch: str = "+0Hz",
+        proxy: str = "",
     ):
+        if not SEC_MS_GEC_VERSION.startswith("2-"):
+            raise TTSError("Edge protocol v2 dependency required")
         self.voice = voice
         self.rate = rate    # 语速稍慢 5%，更像从容说话（人设情感化，Hermes 起草）
         self.pitch = pitch  # 音调默认；想更活泼可 +3Hz
+        self.proxy = proxy  # Explicit URL for profile A; empty string means direct, never env proxy.
 
     async def synthesize(self, text: str) -> bytes:
         import edge_tts
@@ -246,15 +311,16 @@ class EdgeTTS(TTSBase):
         for attempt in range(2):  # 首次 + 1 次重试（缓解网络抖动/瞬时超时）
             try:
                 chunks: list[bytes] = []
-                # 每次新建连接（不复用 connector：edge 服务端会关闲置连接，复用导致 Session is closed）
-                # 注意：edge-tts 7.2.8 已移除自定义 SSML 支持（escape 掉 <>&），express-as 不可用
-                communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch, connector=_ipv4_connector())
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        chunks.append(chunk["data"])
+                async with owned_communicate(edge_tts.Communicate, text=text,
+                                             voice=self.voice, rate=self.rate,
+                                             pitch=self.pitch, proxy=self.proxy) as communicate:
+                    async with aclosing(communicate.stream()) as stream:
+                        async for chunk in stream:
+                            if chunk["type"] == "audio":
+                                chunks.append(chunk["data"])
             except Exception as e:
                 # edge 故障（超时/断网）统一包装为 TTSError → 上层 502（Spec §6.8）
-                last_err = TTSError(f"edge-tts 合成失败: {e}")
+                last_err = TTSError(f"edge-tts 合成失败: {type(e).__name__}")
                 logger.warning("edge 合成失败（第 %d 次），%s", attempt + 1, last_err)
                 if attempt == 0:
                     await asyncio.sleep(0.3)
@@ -290,33 +356,32 @@ class EdgeTTS(TTSBase):
         emitted = 0  # 已产出的 sample 数（增量游标，靠解码前缀一致性保证无重复/无缺口）
         first_sent = False
         try:
-            communicate = edge_tts.Communicate(text=text, voice=self.voice, rate=self.rate, pitch=self.pitch, connector=_ipv4_connector())
-            async for chunk in communicate.stream():
-                if chunk["type"] != "audio":
-                    continue
-                mp3_buf += chunk["data"]
-                try:
-                    dec = miniaudio.decode(
-                        mp3_buf,
-                        output_format=miniaudio.SampleFormat.SIGNED16,
-                        nchannels=1,
-                        sample_rate=16000,
-                    )
-                except Exception:
-                    continue  # 首段 mp3 尚不足以解码，等下个 chunk
-                samples = dec.samples
-                new_n = len(samples) - emitted
-                threshold = later_min_segment_samples if first_sent else min_segment_samples
-                if new_n >= threshold:
-                    yield wrap_pcm_as_wav(samples[emitted:].tobytes(), 16000)
-                    emitted = len(samples)
-                    first_sent = True
+            async with owned_communicate(edge_tts.Communicate, text=text,
+                                         voice=self.voice, rate=self.rate,
+                                         pitch=self.pitch, proxy=self.proxy) as communicate:
+                async with aclosing(communicate.stream()) as stream:
+                    async for chunk in stream:
+                        if chunk["type"] != "audio":
+                            continue
+                        mp3_buf += chunk["data"]
+                        try:
+                            dec = miniaudio.decode(
+                                mp3_buf,
+                                output_format=miniaudio.SampleFormat.SIGNED16,
+                                nchannels=1,
+                                sample_rate=16000,
+                            )
+                        except Exception:
+                            continue  # 首段 mp3 尚不足以解码，等下个 chunk
+                        samples = dec.samples
+                        new_n = len(samples) - emitted
+                        threshold = later_min_segment_samples if first_sent else min_segment_samples
+                        if new_n >= threshold:
+                            yield wrap_pcm_as_wav(samples[emitted:].tobytes(), 16000)
+                            emitted = len(samples)
+                            first_sent = True
         except Exception as e:
-            if emitted == 0:
-                raise TTSError(f"edge-tts 流式合成失败: {e}")
-            # 已发部分帧后失败：静默结束（已发帧照常播放，上层不感知中断）
-            logger.warning("edge 流式合成中途失败（已发 %d samples，已发帧不受影响）: %s", emitted, e)
-            return
+            raise TTSError(f"edge-tts 流式合成失败: {type(e).__name__}") from None
         # flush 剩余（含整句不足首段阈值的情况）
         if mp3_buf:
             try:
@@ -330,7 +395,7 @@ class EdgeTTS(TTSBase):
                 if len(full) > emitted:
                     yield wrap_pcm_as_wav(full[emitted:].tobytes(), 16000)
             except Exception as e:
-                logger.warning("edge 流式 flush 解码失败: %s", e)
+                raise TTSError(f"edge 流式 flush 解码失败: {type(e).__name__}") from None
 
     async def open_preconnect(self, timeout: float = 2.0):
         """方向1：预建 WSS + 发 speech.config（与 LLM 首句生成并行），返回可复用连接。
@@ -346,6 +411,7 @@ class EdgeTTS(TTSBase):
                     f"&Sec-MS-GEC={DRM.generate_sec_ms_gec()}"
                     f"&Sec-MS-GEC-Version={SEC_MS_GEC_VERSION}",
                     compress=15,
+                    proxy=self.proxy,
                     headers=DRM.headers_with_muid(WSS_HEADERS),
                     ssl=_SSL_CTX,
                 ),
@@ -354,8 +420,11 @@ class EdgeTTS(TTSBase):
             await ws.send_str(_speech_config_msg())
             tts_config = TTSConfig(self.voice, self.rate, "+0%", self.pitch, "SentenceBoundary")
             return _EdgePreconnect(session, ws, tts_config)
+        except asyncio.CancelledError:
+            await session.close()
+            raise
         except Exception as e:
-            logger.warning("edge 预连接失败，回退用时建连: %s", e)
+            logger.warning("edge 预连接失败，回退用时建连: %s", type(e).__name__)
             try:
                 await session.close()
             except Exception:
@@ -369,27 +438,80 @@ class TTSEngine:
     保留 health() 上报（Spec §5.1）：configured_primary / active_engine 恒为 "edge"。
     """
 
-    def __init__(self, primary: TTSBase):
+    def __init__(self, primary: TTSBase, probe_timeout: float = 5.0):
         self.primary = primary
         self.configured_primary = primary.name
         self.active_engine = primary.name  # 恒 "edge"
+        self.probe_timeout = probe_timeout
         # 需求1：真实探活状态（active_engine 恒真不可用，需真实合成探测）
         self.last_probe_ok: bool | None = None
         self.last_probe_ts: float | None = None
+        self._health_serial = self._health_applied = self._failures = 0
+        self._health_changed = asyncio.Event()
+        self.last_failure_ts = self.last_failure_category = None
+        self.last_probe_event_ok = self.last_probe_event_ts = None
+
+    def _begin_health_call(self):
+        self._health_serial += 1
+        return self._health_serial
+
+    def _record_health(self, serial, ok, category=None, *, probe=False):
+        import time
+        stamp = time.time()
+        if not ok:
+            self.last_failure_ts, self.last_failure_category = stamp, category
+        if probe:
+            self.last_probe_event_ok, self.last_probe_event_ts = ok, stamp
+        if serial < self._health_applied:
+            return
+        self._health_applied = serial
+        self.last_probe_ok, self.last_probe_ts = ok, stamp
+        self._failures = 0 if ok else self._failures + 1
+        self._health_changed.set()
+
+    def recovery_delay(self, healthy_interval):
+        return healthy_interval if self.last_probe_ok is True else min(30, 2 ** min(5, max(1, self._failures)))
+
+    async def maintain_health(self, healthy_interval):
+        while True:
+            self._health_changed.clear()
+            try:
+                await asyncio.wait_for(self._health_changed.wait(), self.recovery_delay(healthy_interval))
+            except asyncio.TimeoutError:
+                await self.probe()
 
     async def synthesize(self, text: str) -> bytes:
-        return await self.primary.synthesize(text)  # 故障抛 TTSError → 502
+        serial = self._begin_health_call()
+        try:
+            audio = await self.primary.synthesize(text)
+            if not audio:
+                raise TTSError("TTS empty audio")
+        except Exception as exc:
+            self._record_health(serial, False, type(exc).__name__)
+            raise
+        self._record_health(serial, True)
+        return audio
 
     def stream_synthesize(self, text: str, min_segment_samples: int = 800):
         """方案2：流式合成（返回 async generator），供 pipeline 边收边发帧。"""
         async def stream():
+            serial = self._begin_health_call()
+            emitted = False
             try:
-                async for segment in self.primary.stream_synthesize(text, min_segment_samples):
-                    yield segment
-            except TTSError:
+                async with aclosing(self.primary.stream_synthesize(text, min_segment_samples)) as segments:
+                    async for segment in segments:
+                        if segment and not emitted:
+                            emitted = True
+                            self._record_health(serial, True)
+                        yield segment
+                if not emitted:
+                    raise TTSError("TTS empty stream")
+            except TTSError as exc:
+                self._record_health(serial, False, type(exc).__name__)
                 raise
             except Exception as exc:
-                raise TTSError(f"TTS 流式合成失败: {exc}") from exc
+                self._record_health(serial, False, type(exc).__name__)
+                raise TTSError(f"TTS 流式合成失败: {type(exc).__name__}") from None
 
         return stream()
 
@@ -406,22 +528,27 @@ class TTSEngine:
             # 需求1：真实探活结果（供固件状态灯判断 TTS 是否可用）
             "last_probe_ok": self.last_probe_ok,
             "last_probe_ts": self.last_probe_ts,
+            "last_failure_ts": self.last_failure_ts,
+            "last_failure_category": self.last_failure_category,
+            "last_probe_event_ok": self.last_probe_event_ok,
+            "last_probe_event_ts": self.last_probe_event_ts,
         }
 
-    async def probe(self, timeout: float = 5.0) -> bool:
+    async def probe(self, timeout: float | None = None) -> bool:
         """需求1：真实合成探测一次，更新 last_probe_ok / last_probe_ts。
 
         返回是否探测成功。edge 故障时置 False（供 health 上报，固件据此灭灯）。
         """
-        import time as _time
-
+        serial = self._begin_health_call()
         try:
-            await asyncio.wait_for(self.primary.synthesize("测试"), timeout=timeout)
-            self.last_probe_ok = True
-        except Exception:
-            self.last_probe_ok = False
-        self.last_probe_ts = _time.time()
-        return self.last_probe_ok
+            audio = await asyncio.wait_for(self.primary.synthesize("测试"), timeout=self.probe_timeout if timeout is None else timeout)
+            if not audio:
+                raise TTSError("TTS empty probe")
+        except Exception as exc:
+            self._record_health(serial, False, type(exc).__name__, probe=True)
+            return False
+        self._record_health(serial, True, probe=True)
+        return True
 
 
 async def probe_edge(tts: TTSEngine, timeout: float = 3.0) -> None:
@@ -432,13 +559,19 @@ async def probe_edge(tts: TTSEngine, timeout: float = 3.0) -> None:
     """
     ok = await tts.probe(timeout)
     if ok:
-        logger.info("edge probe OK, active_engine=edge")
+        logger.info("%s probe OK, active_engine=%s", tts.active_engine, tts.active_engine)
     else:
-        logger.warning("edge probe failed（edge 唯一，请求时将报 502）")
+        logger.warning("%s probe failed（请求时将报 502）", tts.active_engine)
 
 
 def create_tts(cfg) -> TTSEngine:
     """工厂：A5 起仅 edge 引擎（弃 piper）。"""
+    if cfg.tts_primary == "mimo":
+        from .mimo_tts import MiMoTTS
+        return TTSEngine(MiMoTTS(cfg.tts_mimo_voice, cfg.tts_mimo_timeout), probe_timeout=cfg.tts_probe_timeout)
     if cfg.tts_primary != "edge":
         raise TTSError(f"未知 TTS 主引擎: {cfg.tts_primary}")
-    return TTSEngine(EdgeTTS(cfg.tts_edge_voice))
+    return TTSEngine(
+        EdgeTTS(cfg.tts_edge_voice, cfg.tts_edge_rate, cfg.tts_edge_pitch,
+                proxy=getattr(cfg, "tts_edge_proxy", ""))
+    )

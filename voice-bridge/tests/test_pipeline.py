@@ -128,7 +128,7 @@ def test_context_without_snapshot_returns_fixed_local_text():
 def expected_context_prompt(user_text, reply_text, current_text):
     return (
         f"【上一轮】用户：{user_text}\n"
-        f"小V：{reply_text[:500]}\n\n"
+        f"喵喵同学：{reply_text[:500]}\n\n"
         f"【本轮】用户：{current_text}"
     )
 
