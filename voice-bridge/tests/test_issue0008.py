@@ -2,7 +2,9 @@
 
 轻量通道（DeepSeek）加滑动窗口会话历史，验证 chat/stream_chat 的 messages 携带历史。
 """
-from app.llm import LightweightLLM
+import json
+
+from app.llm import ConversationHistory, HermesLLM, LightweightLLM
 
 
 def _make_llm(tmp_path):
@@ -18,6 +20,35 @@ def _fake_resp(text):
     resp.choices[0].message = type("Msg", (), {})()
     resp.choices[0].message.content = text
     return resp
+
+
+class _FakeHermesResponse:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        payload = {"choices": [{"delta": {"content": self.text}}]}
+        yield "data: " + json.dumps(payload, ensure_ascii=False)
+        yield "data: [DONE]"
+
+    def close(self):
+        return None
+
+
+class _FakeHermesStreamClient:
+    def __init__(self, reply):
+        self.reply = reply
+        self.messages = None
+
+    def build_request(self, method, url, json, headers):
+        self.messages = json["messages"]
+        return object()
+
+    def send(self, request, stream):
+        return _FakeHermesResponse(self.reply)
 
 
 def test_chat_history_injected(tmp_path):
@@ -91,3 +122,124 @@ def test_session_ttl_clears_history(tmp_path):
     roles = [m["role"] for m in msgs]
     assert roles.count("user") == 1        # 只有当前 user，历史已清空
     assert roles.count("assistant") == 0
+
+
+def test_history_is_shared_from_lightweight_to_hermes(tmp_path):
+    """快路径完成的一轮，下一轮切到 Hermes 后仍必须携带。"""
+    history = ConversationHistory()
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户喜欢骑车。", encoding="utf-8")
+    lightweight = LightweightLLM(
+        "k", "http://127.0.0.1:1", "m", str(profile),
+        conversation_history=history,
+    )
+    hermes = HermesLLM(
+        "k", "http://127.0.0.1:1/v1", "m",
+        conversation_history=history,
+    )
+    captured = []
+
+    lightweight.client.chat.completions.create = lambda **kwargs: _fake_resp("我记住了，你叫小王。")
+
+    def fake_hermes_create(**kwargs):
+        captured.append(kwargs["messages"])
+        return _fake_resp("你好，小王。")
+
+    hermes.client.chat.completions.create = fake_hermes_create
+    lightweight.chat("我叫小王")
+    hermes.chat("我叫什么")
+
+    assert {"role": "user", "content": "我叫小王"} in captured[0]
+    assert {"role": "assistant", "content": "我记住了，你叫小王。"} in captured[0]
+
+
+def test_history_is_shared_from_hermes_to_lightweight(tmp_path):
+    """慢路径完成的一轮，下一轮切回快路径后仍必须携带。"""
+    history = ConversationHistory()
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户喜欢骑车。", encoding="utf-8")
+    hermes = HermesLLM(
+        "k", "http://127.0.0.1:1/v1", "m",
+        conversation_history=history,
+    )
+    lightweight = LightweightLLM(
+        "k", "http://127.0.0.1:1", "m", str(profile),
+        conversation_history=history,
+    )
+    captured = []
+
+    hermes.client.chat.completions.create = lambda **kwargs: _fake_resp("北京今天有雨。")
+
+    def fake_lightweight_create(**kwargs):
+        captured.append(kwargs["messages"])
+        return _fake_resp("建议带伞。")
+
+    lightweight.client.chat.completions.create = fake_lightweight_create
+    hermes.chat("查一下北京天气")
+    lightweight.chat("那要带伞吗")
+
+    assert {"role": "user", "content": "查一下北京天气"} in captured[0]
+    assert {"role": "assistant", "content": "北京今天有雨。"} in captured[0]
+
+
+def test_stream_history_crosses_from_lightweight_to_hermes(tmp_path):
+    """真机使用的 stream_chat 路径也必须从快路径跨到慢路径。"""
+    history = ConversationHistory()
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户喜欢骑车。", encoding="utf-8")
+    lightweight = LightweightLLM(
+        "k", "http://127.0.0.1:1", "m", str(profile),
+        conversation_history=history,
+    )
+    hermes = HermesLLM(
+        "k", "http://127.0.0.1:1/v1", "m",
+        conversation_history=history,
+    )
+
+    def fake_lightweight_stream(**kwargs):
+        chunk = type("Chunk", (), {})()
+        chunk.choices = [type("Choice", (), {})()]
+        chunk.choices[0].delta = type("Delta", (), {"content": "我记住了。"})()
+        return iter([chunk])
+
+    lightweight.client.chat.completions.create = fake_lightweight_stream
+    hermes_stream = _FakeHermesStreamClient("你的名字是小王。")
+    hermes._stream_client = hermes_stream
+
+    assert "".join(lightweight.stream_chat("我叫小王")) == "我记住了。"
+    assert "".join(hermes.stream_chat("我叫什么")) == "你的名字是小王。"
+
+    assert {"role": "user", "content": "我叫小王"} in hermes_stream.messages
+    assert {"role": "assistant", "content": "我记住了。"} in hermes_stream.messages
+
+
+def test_stream_history_crosses_from_hermes_to_lightweight(tmp_path):
+    """真机使用的 stream_chat 路径也必须从慢路径跨回快路径。"""
+    history = ConversationHistory()
+    profile = tmp_path / "USER.md"
+    profile.write_text("用户喜欢骑车。", encoding="utf-8")
+    hermes = HermesLLM(
+        "k", "http://127.0.0.1:1/v1", "m",
+        conversation_history=history,
+    )
+    lightweight = LightweightLLM(
+        "k", "http://127.0.0.1:1", "m", str(profile),
+        conversation_history=history,
+    )
+    hermes._stream_client = _FakeHermesStreamClient("北京今天有雨。")
+    captured = []
+
+    def fake_lightweight_stream(**kwargs):
+        captured.append(kwargs["messages"])
+        chunk = type("Chunk", (), {})()
+        chunk.choices = [type("Choice", (), {})()]
+        chunk.choices[0].delta = type("Delta", (), {"content": "建议带伞。"})()
+        return iter([chunk])
+
+    lightweight.client.chat.completions.create = fake_lightweight_stream
+
+    assert "".join(hermes.stream_chat("查一下北京天气")) == "北京今天有雨。"
+    assert "".join(lightweight.stream_chat("那要带伞吗")) == "建议带伞。"
+
+    assert {"role": "user", "content": "查一下北京天气"} in captured[0]
+    assert {"role": "assistant", "content": "北京今天有雨。"} in captured[0]
