@@ -22,6 +22,8 @@ typedef struct {
 esp_err_t max30102_init(void);
 esp_err_t max30102_recover(void);
 uint8_t   max30102_get_part_id(void);
+/* >0 samples; 0 short empty/reset/overflow; -1 confirmed register read failure.
+ * Consume window_invalidated before pushing any recovered successful samples. */
 int       max30102_read_fifo(max30102_sample_t *out, int max_samples);
 void      max30102_get_stats(max30102_stats_t *out);
 bool      max30102_take_window_invalidated(void);

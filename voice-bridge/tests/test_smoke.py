@@ -123,6 +123,45 @@ def test_t2_silence_returns_no_speech(client, monkeypatch):
     assert resp.json()["error"] == "no_speech"
 
 
+def test_streaming_empty_final_is_silent_no_speech(client, monkeypatch):
+    """连续会话误触发上传静音时，不得把“没听清”合成为可播放音频。"""
+    tts_calls = []
+
+    class FakeStreamingASR:
+        def create_stream(self):
+            return object()
+
+        def accept(self, stream, samples):
+            return None
+
+        def partial(self, stream):
+            return ""
+
+        def final(self, stream):
+            return ""
+
+    class ForbiddenTTS:
+        async def synthesize(self, text):
+            tts_calls.append(text)
+            raise AssertionError("空 ASR final 不得调用 TTS")
+
+    monkeypatch.setattr("app.main.streaming_asr", FakeStreamingASR())
+    monkeypatch.setattr("app.main.pipeline", object())
+    monkeypatch.setattr("app.main.tts", ForbiddenTTS())
+
+    resp = client.post(
+        "/api/v1/voice/stream",
+        content=b"\x00\x00" * 320,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["error"] == "no_speech"
+    assert "没听清" not in resp.text
+    assert tts_calls == []
+
+
 # ---------- T3 · 坏格式（非 WAV）→ 400 bad_audio_format（mock） ----------
 def test_t3_bad_format_returns_400(client):
     resp = client.post(

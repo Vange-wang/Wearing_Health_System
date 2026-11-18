@@ -36,11 +36,8 @@ typedef struct {
     uint32_t generation;
     uint32_t events;
     bool begin_pending;
-    bool deferred_input;
     bool ack_pending;
     bool ack_speech_detected;
-    bool ack_protected;
-    bool ack_completion_pending;
     uint32_t tail_low_frames;
     uint32_t tail_total_frames;
     uint32_t first_speech_frames;
@@ -56,8 +53,6 @@ typedef struct {
     bool cancel_round;
     uint32_t upload_samples;
     bool duration_stop_set;
-    bool unbound_cancel_requested;
-    uint64_t pending_ticket;
 } wake_state_t;
 
 typedef struct {
@@ -68,22 +63,6 @@ typedef struct {
 } wake_backlog_t;
 
 static wake_state_t s_state;
-/* Never reset on round/init/key changes: stale tickets must not acquire a new owner. */
-static uint64_t s_pending_sequence;
-static uint64_t next_pending_ticket_locked(void)
-{
-    if(s_pending_sequence==UINT64_MAX)return 0U; /* No identity reuse at exhaustion. */
-    return ++s_pending_sequence;
-}
-#ifndef WAKE_ENGINE_UNBOUND_TEST_STEP
-#define WAKE_ENGINE_UNBOUND_TEST_STEP(x) ((void)0)
-#endif
-#ifdef VOICE_WAKE_DIAGNOSTICS
-static uint32_t s_diag_frames,s_diag_detect_calls,s_diag_model_hits;
-#define WDIAG_INC(x) ((void)__atomic_fetch_add(&(x),1U,__ATOMIC_RELAXED))
-#else
-#define WDIAG_INC(x) ((void)0)
-#endif
 #ifdef WAKE_ENGINE_HOST_TEST
 static int16_t s_pre_roll_storage[WAKE_ENGINE_PRE_ROLL_SAMPLES];
 static int16_t s_hold_storage[WAKE_ENGINE_HOLD_SAMPLES];
@@ -270,17 +249,13 @@ static void trim_pre_roll_for_upload(void)
     pre_roll_unlock();
 }
 
-static bool s_segmented_input;
-void wake_engine_enable_segmented_input(void){s_segmented_input=true;}
-
 static void account_upload_samples(size_t sample_count)
 {
     state_lock();
     if (s_state.state == WAKE_ENGINE_STATE_UPLOADING &&
         !s_state.duration_stop_set) {
-        const uint32_t limit=s_segmented_input ? 1920000U : MAX_CAPTURE_SAMPLES;
-        if (sample_count >= limit - s_state.upload_samples) {
-            s_state.upload_samples = limit;
+        if (sample_count >= MAX_CAPTURE_SAMPLES - s_state.upload_samples) {
+            s_state.upload_samples = MAX_CAPTURE_SAMPLES;
             s_state.duration_stop_set = true;
             s_state.stop_pending = true;
             s_state.stop_generation = s_state.generation;
@@ -309,7 +284,6 @@ static bool speech_above_threshold(const int16_t *samples, size_t sample_count,
 static bool detector_hit(const int16_t *samples, size_t sample_count)
 {
 #ifdef WAKE_ENGINE_HOST_TEST
-    WDIAG_INC(s_diag_detect_calls);
     return s_test_detector != NULL &&
            s_test_detector(samples, sample_count, s_test_detector_context);
 #else
@@ -326,7 +300,6 @@ static bool detector_hit(const int16_t *samples, size_t sample_count)
         s_wakenet_input_count += copy_count;
         offset += copy_count;
         if (s_wakenet_input_count == s_wakenet_chunk_samples) {
-            WDIAG_INC(s_diag_detect_calls);
             int result = s_wakenet->detect(s_wakenet_data, s_wakenet_input);
             s_wakenet_input_count = 0;
             if (result == WAKENET_DETECTED) {
@@ -414,17 +387,6 @@ bool wake_engine_init(void)
         wake_engine_deinit();
         return false;
     }
-    int threshold_before_milli = -1, threshold_after_milli = -1;
-    int threshold_set = -1;
-    if (s_wakenet->get_det_threshold && s_wakenet->set_det_threshold) {
-        threshold_before_milli = (int)(s_wakenet->get_det_threshold(
-            s_wakenet_data, 1) * 1000.0f + 0.5f);
-        threshold_set = s_wakenet->set_det_threshold(s_wakenet_data, 0.620f, 1);
-        threshold_after_milli = (int)(s_wakenet->get_det_threshold(
-            s_wakenet_data, 1) * 1000.0f + 0.5f);
-    }
-    ESP_LOGI(TAG, "wake:threshold word=1 before_milli=%d requested_milli=620 set=%d after_milli=%d",
-             threshold_before_milli, threshold_set, threshold_after_milli);
     if (s_wakenet->get_samp_rate(s_wakenet_data) != 16000 ||
         s_wakenet->get_channel_num(s_wakenet_data) != 1) {
         ESP_LOGE(TAG, "wake:model_load_failed:format");
@@ -527,42 +489,19 @@ wake_engine_frame_route_t wake_engine_process_frame(const int16_t *samples,
 
     state_lock();
     s_sample_index += sample_count;
-    if(s_state.unbound_cancel_requested && s_state.generation==0 &&
-       s_state.mode==WAKE_ENGINE_MODE_WAKE) {
-        const uint64_t ticket=s_state.pending_ticket;
-        state_unlock();
-        WDIAG_INC(s_diag_frames); /* Preserve R13 valid-frame accounting on this cold exit. */
-        /* Only the original frame producer clears its unbound wake buffers.
-         * A concurrent key owns audio_session's separate ring, never these. */
-        WAKE_ENGINE_UNBOUND_TEST_STEP(1);
-        clear_pre_roll();clear_hold();clear_backlog();
-        WAKE_ENGINE_UNBOUND_TEST_STEP(2);
-        state_lock();
-        if(s_state.unbound_cancel_requested && s_state.pending_ticket==ticket &&
-           s_state.generation==0 && s_state.mode==WAKE_ENGINE_MODE_WAKE) {
-            memset(&s_state,0,sizeof(s_state));
-            s_state.events=WAKE_ENGINE_EVENT_UNBOUND_CANCELLED;
-        }
-        const bool key_handover=s_state.mode==WAKE_ENGINE_MODE_KEY && s_state.generation!=0;
-        state_unlock();
-        return key_handover?WAKE_ENGINE_ROUTE_MAIN:WAKE_ENGINE_ROUTE_DROP;
-    }
     wake_engine_state_t state = s_state.state;
     state_unlock();
 
-    WDIAG_INC(s_diag_frames);
     if (state == WAKE_ENGINE_STATE_IDLE) {
         if (!detector_hit(samples, sample_count)) {
             return WAKE_ENGINE_ROUTE_DROP;
         }
         state_lock();
         if (s_state.state == WAKE_ENGINE_STATE_IDLE) {
-            WDIAG_INC(s_diag_model_hits);
             s_state.state = WAKE_ENGINE_STATE_WAKE_TAIL_CONFIRM;
             s_state.mode = WAKE_ENGINE_MODE_WAKE;
             s_state.generation = 0;
             s_state.begin_pending = true;
-            s_state.pending_ticket=next_pending_ticket_locked();s_state.unbound_cancel_requested=false;
             s_state.ack_pending = false;
             s_state.tail_low_frames = 0;
             s_state.tail_total_frames = 0;
@@ -594,9 +533,6 @@ wake_engine_frame_route_t wake_engine_process_frame(const int16_t *samples,
             }
             if (s_state.tail_low_frames >= TAIL_CONFIRM_LOW_FRAMES) {
                 s_state.state = WAKE_ENGINE_STATE_ACK_PLAYING;
-                s_state.ack_protected = true;
-                s_state.ack_completion_pending = false;
-                s_state.ack_speech_detected = false;
                 s_state.ack_pending = true;
                 s_state.events |= WAKE_ENGINE_EVENT_TRIGGERED;
             } else if (s_state.tail_total_frames >=
@@ -636,34 +572,6 @@ wake_engine_frame_route_t wake_engine_process_frame(const int16_t *samples,
     }
 
     if (state == WAKE_ENGINE_STATE_UPLOADING) {
-        state_lock();
-        bool staging=s_state.begin_pending || s_state.deferred_input;
-        uint32_t staging_generation=s_state.generation;
-        state_unlock();
-        if(staging) {
-            /* Once speech is confirmed, never roll away its first samples
-             * while the old response unwinds. Capacity failure is explicit. */
-            pre_roll_lock();
-            bool fits=sample_count<=WAKE_ENGINE_PRE_ROLL_SAMPLES-s_pre_count;
-            if(fits)for(size_t i=0;i<sample_count;i++) {
-                s_pre_roll[s_pre_write]=samples[i];
-                s_pre_write=(s_pre_write+1U)%WAKE_ENGINE_PRE_ROLL_SAMPLES;
-                s_pre_count++;
-            }
-            pre_roll_unlock();
-            if(!fits) {
-                if(staging_generation)wake_engine_report_capture_overflow(staging_generation);
-                else {
-                    state_lock();
-                    s_state.begin_pending=false;s_state.deferred_input=false;
-                    s_state.state=WAKE_ENGINE_STATE_WAIT_SPEECH;
-                    s_state.first_speech_frames=0;s_state.wait_samples=0;
-                    s_state.events|=WAKE_ENGINE_EVENT_BUFFER_OVERFLOW;
-                    state_unlock();clear_pre_roll();
-                }
-            }
-            return WAKE_ENGINE_ROUTE_DROP;
-        }
         account_upload_samples(sample_count);
         state_lock();
         wake_engine_trigger_mode_t mode = s_state.mode;
@@ -781,7 +689,6 @@ wake_engine_frame_route_t wake_engine_process_frame(const int16_t *samples,
             s_state.state = WAKE_ENGINE_STATE_UPLOADING;
             if (s_state.generation == 0U) {
                 s_state.begin_pending = true;
-                s_state.pending_ticket=next_pending_ticket_locked();s_state.unbound_cancel_requested=false;
             }
             s_state.upload_samples =
                 FIRST_SPEECH_FRAMES * WAKE_ENGINE_FRAME_SAMPLES;
@@ -875,7 +782,6 @@ bool wake_engine_bind_capture(uint32_t generation)
          s_state.state == WAKE_ENGINE_STATE_UPLOADING) &&
         s_state.begin_pending && s_state.generation == 0) {
         s_state.generation = generation;
-        s_state.pending_ticket=0;s_state.unbound_cancel_requested=false;
         s_state.begin_pending = false;
         bound = true;
     }
@@ -901,77 +807,60 @@ bool wake_engine_take_ack_request(uint32_t *generation)
     return pending;
 }
 
-bool wake_engine_ack_protected(uint32_t generation)
-{
-    state_lock();
-    bool active = generation != 0 && s_state.generation == generation &&
-                  s_state.mode == WAKE_ENGINE_MODE_WAKE && s_state.ack_protected;
-    state_unlock();
-    return active;
-}
-
-/* Playback task publishes completion only. The PCM producer owns buffer cleanup. */
-void wake_engine_ack_playback_done(uint32_t generation)
-{
-    state_lock();
-    if (generation != 0 && s_state.generation == generation && s_state.ack_protected) {
-        s_state.ack_protected = false;
-        s_state.ack_completion_pending = true;
-    }
-    state_unlock();
-}
-
-bool wake_engine_ack_completion_pending(uint32_t generation)
-{
-    state_lock();
-    bool pending = generation != 0 && s_state.generation == generation &&
-                   s_state.ack_completion_pending;
-    state_unlock();
-    return pending;
-}
-
-/* PCM producer only, after the entire AEC batch has entered pre-roll.
- * Admission keeps the available onset; subsequent PCM goes to the existing V2 store. */
 bool wake_engine_note_ack_speech(uint32_t generation)
 {
     bool accepted = false;
+
     state_lock();
-    if (generation != 0 && s_state.generation == generation &&
-        s_state.mode == WAKE_ENGINE_MODE_WAKE && !s_state.ack_speech_detected &&
-        (s_state.ack_protected || s_state.ack_completion_pending) &&
-        s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING && !s_state.cancel_round) {
-        s_state.ack_speech_detected = true;
-        s_state.state = WAKE_ENGINE_STATE_UPLOADING;
-        s_state.events |= WAKE_ENGINE_EVENT_SPEECH_START;
-        accepted = true;
+    if (generation != 0U && generation == s_state.generation &&
+        s_state.mode == WAKE_ENGINE_MODE_WAKE) {
+        if (s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING) {
+            s_state.ack_speech_detected = true;
+            accepted = true;
+        } else if (s_state.state == WAKE_ENGINE_STATE_WAIT_SPEECH) {
+            s_state.state = WAKE_ENGINE_STATE_UPLOADING;
+            s_state.events |= WAKE_ENGINE_EVENT_SPEECH_START;
+            accepted = true;
+        }
     }
     state_unlock();
+    if (accepted) {
+        trim_pre_roll_for_upload();
+    }
     return accepted;
 }
 
-/* PCM producer only. Never reset an already admitted input or its endpoint. */
 bool wake_engine_ack_complete(uint32_t generation)
 {
-    bool completed = false, empty = false;
+    bool completed = false;
+    bool speech_ready = false;
     state_lock();
     if (generation != 0 && s_state.generation == generation &&
         s_state.mode == WAKE_ENGINE_MODE_WAKE &&
-        (s_state.ack_protected || s_state.ack_completion_pending)) {
-        s_state.ack_protected = false;
-        s_state.ack_completion_pending = false;
+        s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING) {
+        speech_ready = s_state.ack_speech_detected;
+        s_state.state = speech_ready ? WAKE_ENGINE_STATE_UPLOADING
+                                     : WAKE_ENGINE_STATE_WAIT_SPEECH;
         s_state.ack_pending = false;
-        empty = !s_state.ack_speech_detected &&
-                s_state.state == WAKE_ENGINE_STATE_ACK_PLAYING;
-        if (empty) {
-            s_state.state = WAKE_ENGINE_STATE_WAIT_SPEECH;
-            s_state.first_speech_frames = 0;
-            s_state.wait_samples = 0;
-        }
+        s_state.ack_speech_detected = false;
+        s_state.first_speech_frames = 0;
+        s_state.wait_samples = 0;
         s_state.events |= WAKE_ENGINE_EVENT_ACK_COMPLETE;
+        if (speech_ready) {
+            s_state.events |= WAKE_ENGINE_EVENT_SPEECH_START;
+        }
         completed = true;
     }
     state_unlock();
-    if (empty) { clear_pre_roll(); clear_hold(); clear_backlog(); }
+    if (completed) {
+        if (speech_ready) {
+            trim_pre_roll_for_upload();
+        } else {
+            clear_pre_roll();
+        }
+        clear_hold();
+        clear_backlog();
+    }
     return completed;
 }
 
@@ -986,12 +875,8 @@ void wake_engine_begin_key(uint32_t generation)
     s_state.state = WAKE_ENGINE_STATE_UPLOADING;
     s_state.mode = WAKE_ENGINE_MODE_KEY;
     s_state.generation = generation;
-    s_state.pending_ticket=0;s_state.unbound_cancel_requested=false;
     s_state.begin_pending = false;
     s_state.ack_pending = false;
-    s_state.ack_protected = false;
-    s_state.ack_completion_pending = false;
-    s_state.ack_speech_detected = false;
     s_state.tail_low_frames = 0;
     s_state.tail_total_frames = 0;
     s_state.first_speech_frames = 0;
@@ -1014,29 +899,12 @@ void wake_engine_begin_key(uint32_t generation)
     clear_backlog();
 }
 
-bool wake_engine_wait_candidate(uint32_t generation)
-{
-    state_lock();
-    bool ok=generation!=0 && s_state.generation==generation &&
-        s_state.state==WAKE_ENGINE_STATE_UPLOADING;
-    if(ok && s_state.mode==WAKE_ENGINE_MODE_WAKE) {
-        s_state.state=WAKE_ENGINE_STATE_WAIT_SPEECH;
-        s_state.first_speech_frames=0;s_state.wait_samples=0;
-        s_state.end_low_frames=0;s_state.end_pending=false;
-        s_state.end_window_samples=0;s_state.recovery_high_frames=0;
-    }
-    state_unlock();
-    if(ok){clear_pre_roll();clear_hold();}
-    return ok;
-}
-
 bool wake_engine_mark_playing(uint32_t generation)
 {
     bool changed = false;
     state_lock();
     if (generation != 0 && s_state.generation == generation &&
-        (s_state.state == WAKE_ENGINE_STATE_UPLOADING ||
-         (s_segmented_input && s_state.state == WAKE_ENGINE_STATE_WAIT_SPEECH))) {
+        s_state.state == WAKE_ENGINE_STATE_UPLOADING) {
         s_state.state = WAKE_ENGINE_STATE_PLAYING;
         changed = true;
     }
@@ -1044,51 +912,6 @@ bool wake_engine_mark_playing(uint32_t generation)
     return changed;
 }
 
-bool wake_engine_admit_output(uint32_t generation,bool (*admit)(void *),void *context)
-{
-    state_lock();
-    bool eligible=generation && s_state.generation==generation && !s_state.cancel_round &&
-        (s_state.state==WAKE_ENGINE_STATE_WAIT_SPEECH ||
-         (s_state.mode==WAKE_ENGINE_MODE_KEY && s_state.state==WAKE_ENGINE_STATE_UPLOADING));
-    bool accepted=eligible && admit && admit(context);
-    state_unlock();return accepted;
-}
-int wake_engine_commit_output(uint32_t generation,bool success)
-{
-    state_lock();
-    int result=0;
-    if(generation && s_state.generation==generation) {
-        if(s_state.mode==WAKE_ENGINE_MODE_WAKE && s_state.state==WAKE_ENGINE_STATE_UPLOADING) {
-            s_state.deferred_input=true;result=2;
-        }else if(success && (s_state.state==WAKE_ENGINE_STATE_WAIT_SPEECH ||
-                              s_state.state==WAKE_ENGINE_STATE_UPLOADING)) {
-            s_state.state=WAKE_ENGINE_STATE_PLAYING;result=1;
-        }
-    }
-    state_unlock();return result;
-}
-bool wake_engine_defer_input(uint32_t generation)
-{
-    state_lock();
-    bool ok=generation && s_state.generation==generation &&
-        s_state.state==WAKE_ENGINE_STATE_UPLOADING && s_state.mode==WAKE_ENGINE_MODE_WAKE;
-    if(ok)s_state.deferred_input=true;
-    state_unlock();return ok;
-}
-bool wake_engine_restart_deferred_input(uint32_t generation)
-{
-    state_lock();
-    bool ok=generation && s_state.generation==generation && s_state.deferred_input;
-    if(ok) {
-        s_state.state=WAKE_ENGINE_STATE_UPLOADING;
-        s_state.generation=0;s_state.begin_pending=true;s_state.deferred_input=false;
-        s_state.pending_ticket=next_pending_ticket_locked();s_state.unbound_cancel_requested=false;
-        s_state.cancel_round=false;s_state.stop_pending=false;s_state.end_pending=false;
-        s_state.end_low_frames=0;s_state.upload_samples=0;s_state.duration_stop_set=false;
-        s_state.events|=WAKE_ENGINE_EVENT_BARGE_IN;
-    }
-    state_unlock();return ok;
-}
 bool wake_engine_note_barge_in(uint32_t generation)
 {
     bool accepted = false;
@@ -1100,7 +923,6 @@ bool wake_engine_note_barge_in(uint32_t generation)
         s_state.state = WAKE_ENGINE_STATE_UPLOADING;
         s_state.generation = 0U;
         s_state.begin_pending = true;
-        s_state.pending_ticket=next_pending_ticket_locked();s_state.unbound_cancel_requested=false;
         s_state.ack_pending = false;
         s_state.first_speech_frames = 0U;
         s_state.wait_samples = 0U;
@@ -1388,53 +1210,3 @@ wake_response_result_t wake_response_classify(
     }
     return WAKE_RESPONSE_HARD_ERROR;
 }
-
-bool wake_engine_unbound_request(uint64_t *ticket)
-{
-    if(ticket==NULL)return false;
-    state_lock();
-    bool pending=s_state.mode==WAKE_ENGINE_MODE_WAKE && s_state.generation==0 &&
-        s_state.begin_pending && !s_state.unbound_cancel_requested &&
-        (s_state.state==WAKE_ENGINE_STATE_WAKE_TAIL_CONFIRM ||
-         s_state.state==WAKE_ENGINE_STATE_ACK_PLAYING ||
-         s_state.state==WAKE_ENGINE_STATE_WAIT_SPEECH ||
-         s_state.state==WAKE_ENGINE_STATE_UPLOADING);
-    *ticket=pending?s_state.pending_ticket:0;
-    state_unlock();return pending;
-}
-bool wake_engine_cancel_unbound(uint64_t ticket)
-{
-    if(!ticket)return false;
-    state_lock();
-    bool requested=s_state.pending_ticket==ticket && s_state.generation==0 &&
-        s_state.mode==WAKE_ENGINE_MODE_WAKE && s_state.begin_pending &&
-        !s_state.unbound_cancel_requested &&
-        (s_state.state==WAKE_ENGINE_STATE_WAKE_TAIL_CONFIRM ||
-         s_state.state==WAKE_ENGINE_STATE_ACK_PLAYING ||
-         s_state.state==WAKE_ENGINE_STATE_WAIT_SPEECH ||
-         s_state.state==WAKE_ENGINE_STATE_UPLOADING);
-    if(requested){s_state.unbound_cancel_requested=true;s_state.begin_pending=false;s_state.ack_pending=false;}
-    state_unlock();return requested;
-}
-
-#ifdef VOICE_WAKE_DIAGNOSTICS
-bool wake_engine_diag_snapshot(wake_engine_diag_t *out)
-{
-    if(out==NULL)return false;
-    memset(out,0,sizeof(*out));
-    out->available=wake_engine_available()?1U:0U;
-    out->frames=__atomic_load_n(&s_diag_frames,__ATOMIC_RELAXED);
-    out->detect_calls=__atomic_load_n(&s_diag_detect_calls,__ATOMIC_RELAXED);
-    out->model_hits=__atomic_load_n(&s_diag_model_hits,__ATOMIC_RELAXED);
-#ifndef WAKE_ENGINE_HOST_TEST
-    if(s_state_lock==NULL || xSemaphoreTake(s_state_lock,0)!=pdTRUE)return false;
-#endif
-    out->state=s_state.state;out->mode=s_state.mode;out->generation=s_state.generation;
-    out->pending=s_state.begin_pending;out->ack_pending=s_state.ack_pending;
-    out->cancelled=s_state.cancel_round;out->sample_low=(uint32_t)s_sample_index;out->valid=1U;
-#ifndef WAKE_ENGINE_HOST_TEST
-    xSemaphoreGive(s_state_lock);
-#endif
-    return true;
-}
-#endif

@@ -42,23 +42,9 @@ size_t duplex_audio_process_capture_stereo(const int16_t *samples,
                                            size_t frame_count,
                                            int16_t *output,
                                            size_t output_capacity);
-/* Interleaved near-mic mono / independently verified hardware reference.
- * The caller must reject missing samples and unverified channel mapping. */
-size_t duplex_audio_process_capture_mic_ref(const int16_t *samples,
-                                           size_t frame_count,
-                                           int16_t *output,
-                                           size_t output_capacity);
 bool duplex_audio_take_near_speech(uint32_t *generation);
 bool duplex_audio_take_barge_in(uint32_t *generation);
-void duplex_audio_capture_gap(void);
 bool duplex_audio_degraded(void);
-typedef struct {
-    uint64_t noise_floor;
-    uint32_t generation, valid_reference_frames, invalid_reference_frames;
-    uint32_t near_candidates;
-    bool initialized, degraded;
-} duplex_audio_stats_t;
-duplex_audio_stats_t duplex_audio_stats(void);
 
 #ifdef __cplusplus
 }

@@ -20,4 +20,5 @@ hr_spo2_result_t hr_spo2_compute(void);
 #ifdef WRIST_SELF_TEST
 void hr_spo2_test_reset(void);
 void hr_spo2_test_push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us);
+void hr_spo2_test_set_time(uint64_t timestamp_us);
 #endif

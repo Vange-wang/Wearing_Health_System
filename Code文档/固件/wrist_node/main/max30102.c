@@ -225,6 +225,7 @@ static esp_err_t clear_fifo(register_writer_fn writer)
 
 static esp_err_t recover_with_writer(register_writer_fn writer, bool pulse_bus)
 {
+    s_window_invalidated = true;  /* recovery start/success/failure all break lineage */
     ++s_stats.recovery_attempts;
     if (pulse_bus) {
         ESP_LOGW(TAG, "I2C 连续失败 %d 次，尝试总线恢复", s_consec_fails);
@@ -355,7 +356,8 @@ int max30102_read_fifo(max30102_sample_t *out, int max_samples)
 
     uint8_t overflow = 0;
     if (read_reg(REG_OVF_COUNTER, &overflow) != ESP_OK) {
-        return 0;
+        s_window_invalidated = true;
+        return -1;  /* confirmed I2C failure differs from a short empty FIFO */
     }
     if (overflow != 0) {
         ESP_LOGW(TAG, "FIFO overflow count=%u; discarding contaminated window",
@@ -369,7 +371,8 @@ int max30102_read_fifo(max30102_sample_t *out, int max_samples)
     uint8_t rd = 0, wr = 0;
     if (read_reg(REG_FIFO_RD_PTR, &rd) != ESP_OK ||
         read_reg(REG_FIFO_WR_PTR, &wr) != ESP_OK) {
-        return 0;
+        s_window_invalidated = true;
+        return -1;
     }
     int avail = (wr - rd) & 0x1F;
     if (avail == 0) {
@@ -381,7 +384,8 @@ int max30102_read_fifo(max30102_sample_t *out, int max_samples)
 
     static uint8_t buf[32 * 6];
     if (read_regs(REG_FIFO_DATA, buf, (size_t)avail * 6) != ESP_OK) {
-        return 0;
+        s_window_invalidated = true;
+        return -1;
     }
 
     /* 每样本 6 字节：前 3 字节 RED(LED1)，后 3 字节 IR(LED2)，18-bit */

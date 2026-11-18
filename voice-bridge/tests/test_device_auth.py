@@ -33,8 +33,16 @@ class RecordingHealthStore:
         seq: int | None = None,
         flags: int | None = None,
         quality: float = 1.0,
-    ) -> None:
+        *,
+        source_epoch: str | None = None,
+        source_index: int | None = None,
+        source_age_ms: int | None = None,
+    ) -> str:
+        # These boundary cases exercise legacy bodies with no source metadata.
+        # Match the revised store interface without adding production fallback.
+        assert (source_epoch, source_index, source_age_ms) == (None, None, None)
         self.calls.append((hr, spo2, seq, flags, quality))
+        return "new"
 
 
 @pytest.fixture

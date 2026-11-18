@@ -321,15 +321,6 @@ bool audio_session_stop_capture(uint32_t generation)
     return stopped;
 }
 
-bool audio_session_resume_capture(uint32_t generation)
-{
-    state_lock();
-    bool ok=generation!=0 && s_state.generation==generation &&
-        s_state.capture_state==CAPTURE_CONFIRMED && !s_state.cancel_talk;
-    if(ok)s_state.capture_active=true;
-    state_unlock();return ok;
-}
-
 void audio_session_complete_capture(uint32_t generation)
 {
     state_lock();

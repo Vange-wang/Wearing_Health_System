@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "signal_diag.h"
 
+#define SOURCE_MAX_AGE_US UINT64_C(5000000)
 #define WINDOW_SIZE 1024
 #define WINDOW_SECONDS 10.0
 #define DC_MIN_VALID 8000
@@ -35,33 +36,50 @@ typedef struct {
     uint32_t tstamp[WINDOW_SIZE];
     int head;
     int count;
+    uint64_t latest_us;
 } ring_t;
 
 static ring_t s_ring;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static uint16_t s_last_stable_hr;
-static uint16_t s_hr_hist[HR_SMOOTH_N];
-static int s_hr_hist_n;
-static uint16_t s_last_ok_bpm;
-static int s_cold_agree;
-static int s_large_offset_windows;
+typedef struct {
+    uint16_t last_stable_hr;
+    uint16_t hr_hist[HR_SMOOTH_N];
+    int hr_hist_n;
+    uint16_t last_ok_bpm;
+    int cold_agree;
+    int large_offset_windows;
+} tracking_t;
+static tracking_t s_tracking;
+static uint64_t s_generation;
+static uint64_t s_sample_counter;
+static uint64_t s_processed_counter;
+static bool s_compute_busy;
+#ifdef WRIST_SELF_TEST
+static bool s_test_clock_enabled;
+static uint64_t s_test_clock_us;
+#endif
 
-static void reset_tracking_state(void)
+static uint64_t source_now(void)
 {
-    s_last_stable_hr = 0;
-    memset(s_hr_hist, 0, sizeof(s_hr_hist));
-    s_hr_hist_n = 0;
-    s_last_ok_bpm = 0;
-    s_cold_agree = 0;
-    s_large_offset_windows = 0;
+#ifdef WRIST_SELF_TEST
+    if (s_test_clock_enabled) return s_test_clock_us;
+#endif
+    return (uint64_t)esp_timer_get_time();
 }
 
-static void push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us)
+static void reset_tracking_state(tracking_t *tracking)
+{
+    memset(tracking, 0, sizeof(*tracking));
+}
+
+static void push_at(uint32_t ir, uint32_t red, uint64_t timestamp_us)
 {
     portENTER_CRITICAL(&s_mux);
     s_ring.ir[s_ring.head] = ir;
     s_ring.red[s_ring.head] = red;
-    s_ring.tstamp[s_ring.head] = timestamp_us;
+    s_ring.tstamp[s_ring.head] = (uint32_t)timestamp_us;
+    s_ring.latest_us = timestamp_us;
+    ++s_sample_counter;
     s_ring.head = (s_ring.head + 1) % WINDOW_SIZE;
     if (s_ring.count < WINDOW_SIZE) {
         s_ring.count++;
@@ -71,14 +89,16 @@ static void push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us)
 
 void hr_spo2_push(uint32_t ir, uint32_t red)
 {
-    push_at(ir, red, (uint32_t)esp_timer_get_time());
+    push_at(ir, red, (uint64_t)esp_timer_get_time());
 }
 
 void hr_spo2_invalidate_window(void)
 {
     portENTER_CRITICAL(&s_mux);
     memset(&s_ring, 0, sizeof(s_ring));
-    reset_tracking_state();
+    reset_tracking_state(&s_tracking);
+    ++s_generation;
+    s_processed_counter = 0;
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -86,11 +106,23 @@ void hr_spo2_invalidate_window(void)
 void hr_spo2_test_reset(void)
 {
     hr_spo2_invalidate_window();
+    s_test_clock_enabled = false;
+}
+
+void hr_spo2_test_set_time(uint64_t timestamp_us)
+{
+    s_test_clock_enabled = true;
+    s_test_clock_us = timestamp_us;
 }
 
 void hr_spo2_test_push_at(uint32_t ir, uint32_t red, uint32_t timestamp_us)
 {
-    push_at(ir, red, timestamp_us);
+    uint64_t high = s_ring.latest_us & ~UINT64_C(0xffffffff);
+    if (s_ring.count && timestamp_us < (uint32_t)s_ring.latest_us) {
+        high += UINT64_C(0x100000000);
+    }
+    push_at(ir, red, high + timestamp_us);
+    hr_spo2_test_set_time(high + timestamp_us);
 }
 #endif
 
@@ -265,25 +297,12 @@ static void publish_diag(float rate, double dc_ir, double dc_red,
     signal_diag_publish(&snapshot);
 }
 
-hr_spo2_result_t hr_spo2_compute(void)
+static hr_spo2_result_t compute_snapshot(const uint32_t *ir, const uint32_t *red,
+                                          const uint32_t *timestamps, int available,
+                                          tracking_t *tracking)
 {
     hr_spo2_result_t result = { 0, 0, 0, 0 };
-    static uint32_t ir[WINDOW_SIZE];
-    static uint32_t red[WINDOW_SIZE];
-    static uint32_t timestamps[WINDOW_SIZE];
     static double smooth[WINDOW_SIZE];
-
-    int available;
-    portENTER_CRITICAL(&s_mux);
-    available = s_ring.count;
-    int start = (s_ring.head - available + WINDOW_SIZE) % WINDOW_SIZE;
-    for (int i = 0; i < available; ++i) {
-        int index = (start + i) % WINDOW_SIZE;
-        ir[i] = s_ring.ir[index];
-        red[i] = s_ring.red[index];
-        timestamps[i] = s_ring.tstamp[index];
-    }
-    portEXIT_CRITICAL(&s_mux);
 
     if (available < 2) {
         publish_diag(0.0f, 0.0, 0.0, 0.0, 0.0, 0.0f, 0.0f, 0);
@@ -339,7 +358,7 @@ hr_spo2_result_t hr_spo2_compute(void)
     double ac_red = sqrt(var_red);
 
     if (mean_ir < DC_MIN_VALID) {
-        reset_tracking_state();
+        reset_tracking_state(tracking);
         publish_diag((float)rate, mean_ir, mean_red, ac_ir, ac_red,
                      0.0f, 0.0f, 0);
         return result;
@@ -455,58 +474,58 @@ hr_spo2_result_t hr_spo2_compute(void)
 
     bool hr_ok = (bpm >= 30 && bpm <= 220 && waveform_quality_ok);
     bool recovery_accept = false;
-    if (s_last_stable_hr > 0) {
+    if (tracking->last_stable_hr > 0) {
         if (!hr_ok) {
-            s_large_offset_windows = 0;
+            tracking->large_offset_windows = 0;
         }
     }
-    if (hr_ok && s_last_stable_hr > 0) {
-        uint16_t difference = (bpm > s_last_stable_hr)
-                                  ? (bpm - s_last_stable_hr)
-                                  : (s_last_stable_hr - bpm);
+    if (hr_ok && tracking->last_stable_hr > 0) {
+        uint16_t difference = (bpm > tracking->last_stable_hr)
+                                  ? (bpm - tracking->last_stable_hr)
+                                  : (tracking->last_stable_hr - bpm);
         if ((double)difference >
-                HR_CHANGE_FRAC * (double)s_last_stable_hr &&
+                HR_CHANGE_FRAC * (double)tracking->last_stable_hr &&
             qcd > QCD_STRICT) {
             if (waveform_quality_ok) {
-                ++s_large_offset_windows;
-                if (s_large_offset_windows >= RECOVERY_CONFIRM_WINDOWS) {
-                    reset_tracking_state();
+                ++tracking->large_offset_windows;
+                if (tracking->large_offset_windows >= RECOVERY_CONFIRM_WINDOWS) {
+                    reset_tracking_state(tracking);
                     recovery_accept = true;
                 } else {
                     hr_ok = false;
                 }
             } else {
-                s_large_offset_windows = 0;
+                tracking->large_offset_windows = 0;
                 hr_ok = false;
             }
         } else {
-            s_large_offset_windows = 0;
+            tracking->large_offset_windows = 0;
         }
     }
-    if (hr_ok && s_last_stable_hr == 0 && !recovery_accept) {
-        if (s_last_ok_bpm > 0) {
-            uint16_t difference = (bpm > s_last_ok_bpm)
-                                      ? (bpm - s_last_ok_bpm)
-                                      : (s_last_ok_bpm - bpm);
+    if (hr_ok && tracking->last_stable_hr == 0 && !recovery_accept) {
+        if (tracking->last_ok_bpm > 0) {
+            uint16_t difference = (bpm > tracking->last_ok_bpm)
+                                      ? (bpm - tracking->last_ok_bpm)
+                                      : (tracking->last_ok_bpm - bpm);
             if (difference <= COLD_AGREE_BPM) {
-                ++s_cold_agree;
+                ++tracking->cold_agree;
             } else {
-                s_cold_agree = 0;
+                tracking->cold_agree = 0;
             }
         }
-        s_last_ok_bpm = bpm;
-        if (s_cold_agree < 1) {
+        tracking->last_ok_bpm = bpm;
+        if (tracking->cold_agree < 1) {
             hr_ok = false;
         }
     }
 
     uint16_t hr_out = 0;
     if (hr_ok) {
-        s_hr_hist[s_hr_hist_n % HR_SMOOTH_N] = bpm;
-        ++s_hr_hist_n;
-        if (s_hr_hist_n >= HR_SMOOTH_N) {
+        tracking->hr_hist[tracking->hr_hist_n % HR_SMOOTH_N] = bpm;
+        ++tracking->hr_hist_n;
+        if (tracking->hr_hist_n >= HR_SMOOTH_N) {
             uint16_t sorted[HR_SMOOTH_N];
-            memcpy(sorted, s_hr_hist, sizeof(sorted));
+            memcpy(sorted, tracking->hr_hist, sizeof(sorted));
             for (int i = 0; i < HR_SMOOTH_N - 1; ++i) {
                 for (int j = i + 1; j < HR_SMOOTH_N; ++j) {
                     if (sorted[j] < sorted[i]) {
@@ -520,15 +539,15 @@ hr_spo2_result_t hr_spo2_compute(void)
         } else {
             hr_out = bpm;
         }
-        s_last_stable_hr = hr_out;
+        tracking->last_stable_hr = hr_out;
     }
 
     if (hr_ok) {
         result.flags |= 0x01;
         result.heart_rate = hr_out;
-    } else if (s_last_stable_hr > 0) {
+    } else if (tracking->last_stable_hr > 0) {
         result.flags |= 0x01 | 0x04;
-        result.heart_rate = s_last_stable_hr;
+        result.heart_rate = tracking->last_stable_hr;
         if (confidence > 40) {
             confidence = 40;
             result.confidence = (uint8_t)confidence;
@@ -555,5 +574,61 @@ hr_spo2_result_t hr_spo2_compute(void)
     }
 #endif
 
+    return result;
+}
+
+hr_spo2_result_t hr_spo2_compute(void)
+{
+    static uint32_t ir[WINDOW_SIZE], red[WINDOW_SIZE], timestamps[WINDOW_SIZE];
+    hr_spo2_result_t invalid = {0};
+    tracking_t tracking;
+    uint64_t generation, counter, latest;
+    int available;
+    uint64_t now;
+    portENTER_CRITICAL(&s_mux);
+    if (s_compute_busy) {
+        portEXIT_CRITICAL(&s_mux);
+        return invalid;
+    }
+    /* Read clock and latest sample in the same locked view. */
+    now = source_now();
+    if (s_ring.count && (now < s_ring.latest_us || now - s_ring.latest_us > SOURCE_MAX_AGE_US)) {
+        memset(&s_ring, 0, sizeof(s_ring));
+        reset_tracking_state(&s_tracking);
+        ++s_generation;
+        s_processed_counter = 0;
+        portEXIT_CRITICAL(&s_mux);
+        return invalid;
+    }
+    if (s_ring.count < 2 || s_sample_counter == s_processed_counter) {
+        portEXIT_CRITICAL(&s_mux);
+        return invalid;
+    }
+    s_compute_busy = true;
+    generation = s_generation;
+    counter = s_sample_counter;
+    s_processed_counter = counter;
+    latest = s_ring.latest_us;
+    tracking = s_tracking;
+    available = s_ring.count;
+    int start = (s_ring.head - available + WINDOW_SIZE) % WINDOW_SIZE;
+    for (int i = 0; i < available; ++i) {
+        int index = (start + i) % WINDOW_SIZE;
+        ir[i] = s_ring.ir[index];
+        red[i] = s_ring.red[index];
+        timestamps[i] = s_ring.tstamp[index];
+    }
+    portEXIT_CRITICAL(&s_mux);
+    hr_spo2_result_t result = compute_snapshot(ir, red, timestamps, available, &tracking);
+    portENTER_CRITICAL(&s_mux);
+    now = source_now();
+    if (generation == s_generation && counter == s_processed_counter &&
+        now >= latest && now - latest <= SOURCE_MAX_AGE_US) {
+        s_tracking = tracking;
+    } else {
+        result = invalid;
+    }
+    s_compute_busy = false;
+    portEXIT_CRITICAL(&s_mux);
     return result;
 }

@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "examples" / "ble_wrist_node" / "main"
+MAIN = ROOT / "main"
 
 
 def read(name: str) -> str:

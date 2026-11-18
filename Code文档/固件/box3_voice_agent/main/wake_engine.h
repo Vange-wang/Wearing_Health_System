@@ -63,7 +63,6 @@ enum {
     WAKE_ENGINE_EVENT_SESSION_REARMED = 1U << 13,
     WAKE_ENGINE_EVENT_SESSION_TIMEOUT = 1U << 14,
     WAKE_ENGINE_EVENT_BARGE_IN = 1U << 15,
-    WAKE_ENGINE_EVENT_UNBOUND_CANCELLED = 1U << 16,
 };
 
 bool wake_engine_init(void);
@@ -88,26 +87,13 @@ uint32_t wake_engine_take_events(void);
 bool wake_engine_capture_begin_pending(void);
 bool wake_engine_bind_capture(uint32_t generation);
 bool wake_engine_take_ack_request(uint32_t *generation);
-/* note/complete are PCM-producer operations; playback_done only publishes. */
-bool wake_engine_ack_protected(uint32_t generation);
-void wake_engine_ack_playback_done(uint32_t generation);
-bool wake_engine_ack_completion_pending(uint32_t generation);
 bool wake_engine_note_ack_speech(uint32_t generation);
 bool wake_engine_ack_complete(uint32_t generation);
 void wake_engine_begin_key(uint32_t generation);
 void wake_engine_cancel_key_capture(uint32_t generation);
 bool wake_engine_mark_playing(uint32_t generation);
-void wake_engine_enable_segmented_input(void);
-bool wake_engine_wait_candidate(uint32_t generation);
 bool wake_engine_finish_round(uint32_t generation, bool keep_session);
 bool wake_engine_note_barge_in(uint32_t generation);
-bool wake_engine_defer_input(uint32_t generation);
-bool wake_engine_restart_deferred_input(uint32_t generation);
-/* 0 stale, 1 playback, 2 confirmed speech retained for next turn. */
-int wake_engine_commit_output(uint32_t generation,bool success);
-/* Caller holds its capture-state lock. admit must be synchronous/nonblocking;
- * it runs under the wake-state lock so speech confirmation cannot cross it. */
-bool wake_engine_admit_output(uint32_t generation,bool (*admit)(void *),void *context);
 void wake_engine_note_capture_samples(uint32_t generation,
                                       size_t sample_count);
 void wake_engine_report_capture_overflow(uint32_t generation);
@@ -129,19 +115,6 @@ wake_response_result_t wake_response_classify(
     wake_response_progress_t *progress, int read_result, int eagain_result,
     bool protocol_complete, int64_t now_us);
 
-
-/* Exact unbound request identity; cancellation is complete only at producer commit. */
-bool wake_engine_unbound_request(uint64_t *ticket);
-bool wake_engine_cancel_unbound(uint64_t ticket);
 #ifdef __cplusplus
 }
-#endif
-
-
-#ifdef VOICE_WAKE_DIAGNOSTICS
-typedef struct {
-    uint32_t valid,available,state,mode,generation,pending,ack_pending,cancelled;
-    uint32_t frames,detect_calls,model_hits,sample_low;
-} wake_engine_diag_t;
-bool wake_engine_diag_snapshot(wake_engine_diag_t *out);
 #endif

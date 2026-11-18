@@ -117,7 +117,9 @@ static esp_err_t check_secondary_peak_rejection(const char *tag)
     hr_spo2_test_reset();
     feed_secondary_peak_vector(0U, TEST_SAMPLE_COUNT, false);
     hr_spo2_result_t first = hr_spo2_compute();
+    feed_secondary_peak_vector(10000000U, 500, false);
     hr_spo2_result_t second = hr_spo2_compute();
+    feed_secondary_peak_vector(15000000U, 500, false);
     hr_spo2_result_t third = hr_spo2_compute();
 
     if ((first.flags & 0x01) != 0 ||
@@ -144,6 +146,7 @@ static esp_err_t check_bounded_recovery(const char *tag)
     hr_spo2_test_reset();
     feed_periodic_vector(0U, TEST_SAMPLE_COUNT, 0.60, 3000.0);
     (void)hr_spo2_compute();
+    feed_periodic_vector(10000000U, 500, 0.60, 3000.0);
     hr_spo2_result_t locked = hr_spo2_compute();
     if ((locked.flags & 0x01) == 0 || locked.heart_rate < 95 ||
         locked.heart_rate > 105) {
@@ -152,9 +155,9 @@ static esp_err_t check_bounded_recovery(const char *tag)
         return ESP_FAIL;
     }
 
-    feed_jittered_vector(10000000U, TEST_SAMPLE_COUNT);
+    feed_jittered_vector(15000000U, TEST_SAMPLE_COUNT);
     hr_spo2_result_t first_true_window = hr_spo2_compute();
-    feed_jittered_vector(20000000U, TEST_SAMPLE_COUNT);
+    feed_jittered_vector(25000000U, TEST_SAMPLE_COUNT);
     hr_spo2_result_t recovered = hr_spo2_compute();
 
     if ((recovered.flags & 0x01) == 0 || recovered.heart_rate < 60 ||
@@ -179,7 +182,9 @@ static esp_err_t check_spo2_quality_gate(const char *tag)
     hr_spo2_test_reset();
     feed_secondary_peak_vector(0U, TEST_SAMPLE_COUNT, true);
     (void)hr_spo2_compute();
+    feed_secondary_peak_vector(10000000U, 500, true);
     (void)hr_spo2_compute();
+    feed_secondary_peak_vector(15000000U, 500, true);
     hr_spo2_result_t bad = hr_spo2_compute();
 
     if ((bad.flags & 0x02) != 0 || bad.spo2 != 0 ||
@@ -207,6 +212,12 @@ esp_err_t hr_spo2_selftest(void)
         hr_spo2_test_push_at(ir, red, start_us + (uint32_t)i * TEST_PERIOD_US);
     }
     (void)hr_spo2_compute();
+    for (int i = TEST_SAMPLE_COUNT; i < TEST_SAMPLE_COUNT + 500; ++i) {
+        double wave = sin(TWO_PI * 1.25 * (double)i / 100.0);
+        hr_spo2_test_push_at((uint32_t)(50000.0 + 5000.0 * wave),
+                             (uint32_t)(45000.0 + 3000.0 * wave),
+                             start_us + (uint32_t)i * TEST_PERIOD_US);
+    }
     hr_spo2_result_t stable = hr_spo2_compute();
     if ((stable.flags & 0x01) == 0 || stable.heart_rate < 72 ||
         stable.heart_rate > 78 || (stable.flags & 0x02) == 0 ||
@@ -219,7 +230,7 @@ esp_err_t hr_spo2_selftest(void)
     for (int i = 0; i < TEST_SAMPLE_COUNT; ++i) {
         uint32_t motion = (i == 100 || i == 350 || i == 700) ? 12000U : 0U;
         hr_spo2_test_push_at(50000U + motion, 45000U + motion / 2U,
-                            start_us + (uint32_t)(TEST_SAMPLE_COUNT + i) *
+                            start_us + (uint32_t)(TEST_SAMPLE_COUNT + 500 + i) *
                                            TEST_PERIOD_US);
     }
     hr_spo2_result_t noisy = hr_spo2_compute();

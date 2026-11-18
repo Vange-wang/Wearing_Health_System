@@ -35,7 +35,6 @@ typedef struct {
 
 typedef struct {
     bool initialized;
-    bool capture_discontinuous;
     bool playing;
     bool degraded;
     bool near_speech_pending;
@@ -50,10 +49,8 @@ typedef struct {
     size_t reference_read;
     size_t reference_count;
     size_t aec_frame_count;
-    bool reference_frame_invalid;
     size_t vad_frame_count;
     uint64_t noise_floor;
-    uint32_t valid_reference_frames, invalid_reference_frames, near_candidates;
 #ifdef DUPLEX_AUDIO_HOST_TEST
     duplex_audio_test_ops_t test_ops;
     void *test_context;
@@ -132,7 +129,6 @@ static uint64_t energy_of(const int16_t *samples, size_t sample_count)
 static void clear_processing_buffers(void)
 {
     s_state.aec_frame_count = 0U;
-    s_state.reference_frame_invalid = false;
     s_state.vad_frame_count = 0U;
     barge_in_gate_reset();
 }
@@ -177,20 +173,10 @@ static bool run_vad(const int16_t *samples)
 static void update_noise_floor(const int16_t *samples, size_t sample_count)
 {
     size_t offset = 0U;
-    process_lock();
-    if (!s_state.initialized || s_state.playing) {
-        process_unlock();
-        return;
-    }
+
     while (sample_count - offset >= DUPLEX_AUDIO_VAD_FRAME_SAMPLES) {
-        if (run_vad(samples + offset)) {
-            offset += DUPLEX_AUDIO_VAD_FRAME_SAMPLES;
-            continue;
-        }
-        const uint64_t measured =
+        const uint64_t energy =
             energy_of(samples + offset, DUPLEX_AUDIO_VAD_FRAME_SAMPLES);
-        const uint64_t energy = measured ? measured : 1U;
-        state_lock();
         if (s_state.noise_floor == 0U) {
             s_state.noise_floor = energy;
         } else if (energy >= s_state.noise_floor) {
@@ -202,10 +188,8 @@ static void update_noise_floor(const int16_t *samples, size_t sample_count)
                 (s_state.noise_floor - energy) >>
                 DUPLEX_AUDIO_NOISE_SMOOTHING_SHIFT;
         }
-        state_unlock();
         offset += DUPLEX_AUDIO_VAD_FRAME_SAMPLES;
     }
-    process_unlock();
 }
 
 static void process_vad_samples(const int16_t *samples, size_t sample_count)
@@ -224,7 +208,6 @@ static void process_vad_samples(const int16_t *samples, size_t sample_count)
             vad_speech, near_energy, s_state.noise_floor);
         state_lock();
         if (candidate && !s_state.degraded && !s_state.near_speech_reported) {
-            s_state.near_candidates++;
             s_state.near_speech_pending = true;
             s_state.near_speech_reported = true;
             s_state.near_speech_generation = s_state.generation;
@@ -361,7 +344,7 @@ bool duplex_audio_init_for_test(const duplex_audio_test_ops_t *ops,
 bool duplex_audio_begin_playback(duplex_playback_policy_t policy,
                                  uint32_t generation)
 {
-    if (!s_state.initialized || s_state.capture_discontinuous ||
+    if (!s_state.initialized ||
         (policy != DUPLEX_PLAYBACK_ACK_PROTECTED &&
          policy != DUPLEX_PLAYBACK_RESPONSE_INTERRUPTIBLE)) {
         s_state.degraded = true;
@@ -372,7 +355,6 @@ bool duplex_audio_begin_playback(duplex_playback_policy_t policy,
     clear_processing_buffers();
     state_lock();
     reset_playback_state_locked();
-    s_state.valid_reference_frames = s_state.invalid_reference_frames = s_state.near_candidates = 0;
     s_state.policy = policy;
     s_state.generation = generation;
     s_state.playing = true;
@@ -427,11 +409,10 @@ size_t duplex_audio_push_playback_stereo(const int16_t *samples,
     return accepted;
 }
 
-static size_t process_capture(const int16_t *samples,
-                              size_t frame_count,
-                              int16_t *output,
-                              size_t output_capacity,
-                              bool hardware_reference)
+size_t duplex_audio_process_capture_stereo(const int16_t *samples,
+                                           size_t frame_count,
+                                           int16_t *output,
+                                           size_t output_capacity)
 {
     size_t produced = 0U;
     bool playing;
@@ -445,10 +426,9 @@ static size_t process_capture(const int16_t *samples,
     playing = s_state.playing;
     degraded = s_state.degraded;
     state_unlock();
-    if (hardware_reference && degraded) return 0U;
     if (!playing || degraded) {
         for (size_t i = 0U; i < frame_count; ++i) {
-            output[i] = hardware_reference ? samples[i * 2U] : stereo_to_mono(samples + (i * 2U));
+            output[i] = stereo_to_mono(samples + (i * 2U));
         }
         if (!playing) {
             update_noise_floor(output, frame_count);
@@ -461,14 +441,10 @@ static size_t process_capture(const int16_t *samples,
     playing = s_state.playing;
     degraded = s_state.degraded;
     state_unlock();
-    if (hardware_reference && degraded) {
-        process_unlock();
-        return 0U;
-    }
     if (!playing || degraded) {
         process_unlock();
         for (size_t i = 0U; i < frame_count; ++i) {
-            output[i] = hardware_reference ? samples[i * 2U] : stereo_to_mono(samples + (i * 2U));
+            output[i] = stereo_to_mono(samples + (i * 2U));
         }
         if (!playing) {
             update_noise_floor(output, frame_count);
@@ -480,10 +456,8 @@ static size_t process_capture(const int16_t *samples,
     for (size_t i = 0U; i < frame_count; ++i) {
         const size_t frame_index = s_state.aec_frame_count++;
         s_state.buffers->microphone_frame[frame_index] =
-            hardware_reference ? samples[i * 2U] : stereo_to_mono(samples + (i * 2U));
-        if (hardware_reference) {
-            s_state.buffers->reference_frame[frame_index] = samples[i * 2U + 1U];
-        } else if (s_state.reference_count > 0U) {
+            stereo_to_mono(samples + (i * 2U));
+        if (s_state.reference_count > 0U) {
             s_state.buffers->reference_frame[frame_index] =
                 s_state.buffers->reference_fifo[s_state.reference_read];
             s_state.reference_read =
@@ -492,18 +466,6 @@ static size_t process_capture(const int16_t *samples,
             s_state.reference_count--;
         } else {
             s_state.buffers->reference_frame[frame_index] = 0;
-            /* Missing samples are not a valid silent playback reference.
-             * Revoke pending evidence immediately, including partial frames.
-             * process_lock serializes this reset with VAD accumulation. */
-            if (!s_state.reference_frame_invalid) {
-                s_state.reference_frame_invalid = true;
-                s_state.vad_frame_count = 0U;
-                barge_in_gate_reset();
-                s_state.near_speech_pending = false;
-                s_state.near_speech_reported = false;
-                s_state.barge_pending = false;
-                s_state.barge_reported = false;
-            }
         }
 
         if (s_state.aec_frame_count != DUPLEX_AUDIO_AEC_FRAME_SAMPLES) {
@@ -526,16 +488,9 @@ static size_t process_capture(const int16_t *samples,
         memcpy(output + produced, s_state.buffers->aec_output,
                sizeof(s_state.buffers->aec_output));
         produced += DUPLEX_AUDIO_AEC_FRAME_SAMPLES;
-        state_lock();
-        if (s_state.reference_frame_invalid) s_state.invalid_reference_frames++;
-        else s_state.valid_reference_frames++;
-        state_unlock();
-        if (!s_state.reference_frame_invalid) {
-            process_vad_samples(s_state.buffers->aec_output,
-                                DUPLEX_AUDIO_AEC_FRAME_SAMPLES);
-        }
+        process_vad_samples(s_state.buffers->aec_output,
+                            DUPLEX_AUDIO_AEC_FRAME_SAMPLES);
         s_state.aec_frame_count = 0U;
-        s_state.reference_frame_invalid = false;
         state_lock();
     }
     state_unlock();
@@ -543,31 +498,15 @@ static size_t process_capture(const int16_t *samples,
     state_lock();
     degraded = s_state.degraded;
     state_unlock();
-    if (hardware_reference && degraded) {
-        process_unlock();
-        return 0U;
-    }
     if (degraded) {
         for (size_t i = produced; i < frame_count; ++i) {
-            output[i] = hardware_reference ? samples[i * 2U] : stereo_to_mono(samples + (i * 2U));
+            output[i] = stereo_to_mono(samples + (i * 2U));
         }
         process_unlock();
         return frame_count;
     }
     process_unlock();
     return produced;
-}
-
-size_t duplex_audio_process_capture_stereo(const int16_t *samples, size_t frames,
-                                           int16_t *output, size_t capacity)
-{
-    return process_capture(samples, frames, output, capacity, false);
-}
-
-size_t duplex_audio_process_capture_mic_ref(const int16_t *samples, size_t frames,
-                                           int16_t *output, size_t capacity)
-{
-    return process_capture(samples, frames, output, capacity, true);
 }
 
 bool duplex_audio_take_near_speech(uint32_t *generation)
@@ -604,23 +543,6 @@ bool duplex_audio_take_barge_in(uint32_t *generation)
     return taken;
 }
 
-void duplex_audio_capture_gap(void)
-{
-    process_lock();
-    state_lock();
-    s_state.capture_discontinuous = true;
-    s_state.degraded = true;
-    s_state.playing = false;
-    s_state.noise_floor = 0;
-    reset_playback_state_locked();
-    state_unlock();
-    clear_processing_buffers();
-    if (s_state.buffers) memset(s_state.buffers, 0, sizeof(*s_state.buffers));
-    process_unlock();
-    /* The opaque AEC filter has no reset API. Fresh init is mandatory before
-     * accepting hardware-reference PCM again; begin_playback cannot bypass it. */
-}
-
 bool duplex_audio_degraded(void)
 {
     bool degraded;
@@ -629,18 +551,4 @@ bool duplex_audio_degraded(void)
     degraded = s_state.degraded;
     state_unlock();
     return degraded;
-}
-
-duplex_audio_stats_t duplex_audio_stats(void)
-{
-    state_lock();
-    duplex_audio_stats_t stats = {
-        .noise_floor=s_state.noise_floor, .generation=s_state.generation,
-        .valid_reference_frames=s_state.valid_reference_frames,
-        .invalid_reference_frames=s_state.invalid_reference_frames,
-        .near_candidates=s_state.near_candidates,
-        .initialized=s_state.initialized, .degraded=s_state.degraded,
-    };
-    state_unlock();
-    return stats;
 }

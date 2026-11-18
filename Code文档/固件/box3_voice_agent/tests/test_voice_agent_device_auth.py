@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "examples" / "voice_agent" / "main"
+MAIN = ROOT / "main"
 
 
 def source(name: str) -> str:

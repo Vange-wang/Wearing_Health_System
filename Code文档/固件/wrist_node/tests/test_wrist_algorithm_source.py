@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = ROOT / "examples" / "ble_wrist_node" / "main"
+MAIN = ROOT / "main"
 
 
 def read(name: str) -> str:
@@ -43,7 +43,7 @@ def test_false_peak_filter_and_bounded_recovery_guards_are_in_algorithm_source()
         "SECONDARY_AMPLITUDE_RATIO_MAX 0.85",
         "filter_secondary_peaks",
         "HEART_PERIODICITY_MIN 0.45",
-        "s_large_offset_windows",
+        "large_offset_windows",
         "RECOVERY_CONFIRM_WINDOWS 2",
     ):
         assert marker in algorithm

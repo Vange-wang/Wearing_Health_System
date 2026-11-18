@@ -44,7 +44,6 @@ bool audio_session_capture_has_buffered(void);
 size_t audio_session_capture_buffered_samples(void);
 /* Stops producer writes while preserving buffered PCM for the HTTP consumer. */
 bool audio_session_stop_capture(uint32_t generation);
-bool audio_session_resume_capture(uint32_t generation);
 void audio_session_complete_capture(uint32_t generation);
 
 /* Exclusive lease/cancellation interface shared by talk and alert paths. */
